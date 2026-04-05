@@ -1,0 +1,58 @@
+name: 'tf-format'
+description: 'Check Terraform/OpenTofu HCL formatting with tf-format'
+inputs:
+  version:
+    description: 'Version of tf-format to use (e.g., v0.1.0 or latest)'
+    required: false
+    default: 'latest'
+  directory:
+    description: 'Directory to check'
+    required: false
+    default: '.'
+  args:
+    description: 'Arguments to pass to tf-format'
+    required: false
+    default: '--check'
+runs:
+  using: 'composite'
+  steps:
+    - name: Determine platform
+      id: platform
+      shell: bash
+      run: |
+        case "${{ runner.os }}-${{ runner.arch }}" in
+          Linux-X64)   echo "binary=tf-format-linux-amd64" >> "$GITHUB_OUTPUT" ;;
+          Linux-ARM64)  echo "binary=tf-format-linux-arm64" >> "$GITHUB_OUTPUT" ;;
+          macOS-X64)    echo "binary=tf-format-darwin-amd64" >> "$GITHUB_OUTPUT" ;;
+          macOS-ARM64)  echo "binary=tf-format-darwin-arm64" >> "$GITHUB_OUTPUT" ;;
+          *) echo "::error::Unsupported platform: ${{ runner.os }}-${{ runner.arch }}"; exit 1 ;;
+        esac
+
+    - name: Download tf-format
+      shell: bash
+      run: |
+        set -euo pipefail
+        VERSION="${{ inputs.version }}"
+        BINARY="${{ steps.platform.outputs.binary }}"
+        if [ "$VERSION" = "latest" ]; then
+          BASE_URL="https://github.com/alisonjenkins/tf-format/releases/latest/download"
+        else
+          BASE_URL="https://github.com/alisonjenkins/tf-format/releases/download/${VERSION}"
+        fi
+        curl -fsSL "${BASE_URL}/${BINARY}" -o /usr/local/bin/tf-format
+        curl -fsSL "${BASE_URL}/${BINARY}.sha256" -o /tmp/tf-format.sha256
+        echo "Verifying SHA256 checksum..."
+        cd /usr/local/bin
+        set +e
+        sha256sum -c /tmp/tf-format.sha256
+        CHECKSUM_RESULT=$?
+        set -e
+        if [ "$CHECKSUM_RESULT" -ne 0 ]; then
+          echo "::error::SHA256 checksum verification failed for ${BINARY}. The downloaded binary may be corrupted or tampered with. Expected checksum: $(cat /tmp/tf-format.sha256)"
+          exit 1
+        fi
+        chmod +x /usr/local/bin/tf-format
+
+    - name: Run tf-format
+      shell: bash
+      run: tf-format ${{ inputs.args }} ${{ inputs.directory }}

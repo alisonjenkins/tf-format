@@ -95,6 +95,26 @@ tf-format --diff .
 cat main.tf | tf-format --stdin
 ```
 
+### GitHub Action
+
+Add tf-format to your CI pipeline with the included GitHub Action:
+
+```yaml
+- uses: alisonjenkins/tf-format@v1
+```
+
+This downloads the correct binary for the runner's platform, verifies its SHA256 checksum, and runs `tf-format --check .`. The step fails if any files need formatting.
+
+Options:
+
+```yaml
+- uses: alisonjenkins/tf-format@v1
+  with:
+    version: 'v0.1.0'  # pin a specific version (default: latest)
+    directory: 'infra/' # directory to check (default: .)
+    args: '--diff'      # override arguments (default: --check)
+```
+
 ### Supported file types
 
 `.tf`, `.tofu`, `.tfvars` — all discovered automatically when scanning directories.
