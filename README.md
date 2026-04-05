@@ -203,7 +203,7 @@ let formatted = format_hcl(input).expect("valid HCL");
 
 ## Design
 
-- **Deterministic** — same input always produces same output
-- **Idempotent** — formatting already-formatted code is a no-op
-- **Fast** — operates on the AST via [hcl-edit](https://crates.io/crates/hcl-edit), not string manipulation
+- **Fast** — tf-format is a single native binary with no runtime dependencies. It parses HCL into an AST via [hcl-edit](https://crates.io/crates/hcl-edit) and manipulates it in-memory rather than doing string processing, so formatting even large Terraform codebases completes in milliseconds. There is no JVM startup, no interpreter overhead, and no shelling out to `terraform fmt` — just parse, sort, emit.
+- **Reliable** — every formatting rule is covered by fixture tests that verify both correctness and idempotency (formatting twice always produces identical output). The formatter never modifies semantics: list order is preserved, comments travel with their attributes, and inline expressions are left untouched. Typed error handling with full context means failures report exactly what went wrong and where.
+- **Deterministic** — same input always produces same output, regardless of the original formatting
 - **No configuration** — one style, consistently applied
