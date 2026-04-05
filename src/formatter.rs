@@ -4,6 +4,37 @@ use hcl_edit::structure::{Body, Structure};
 
 use crate::classify::is_multiline;
 
+/// Attributes that are meta-arguments or module-specific and should appear at
+/// the top of a block, in this fixed order.
+const PRIORITY_ATTRS: &[&str] = &[
+    "source",
+    "version",
+    "count",
+    "for_each",
+    "provider",
+    "depends_on",
+];
+
+/// Blocks that are meta-arguments and should appear at the top of a block.
+const PRIORITY_BLOCKS: &[&str] = &["lifecycle"];
+
+/// Returns the priority index for a structure if it's a priority item, or None.
+fn priority_index(structure: &Structure) -> Option<usize> {
+    match structure {
+        Structure::Attribute(attr) => {
+            let key = attr.key.as_str();
+            PRIORITY_ATTRS.iter().position(|&k| k == key)
+        }
+        Structure::Block(block) => {
+            let ident = block.ident.as_str();
+            PRIORITY_BLOCKS
+                .iter()
+                .position(|&k| k == ident)
+                .map(|i| PRIORITY_ATTRS.len() + i)
+        }
+    }
+}
+
 /// Extract a sort key from a structure. For attributes this is the key name,
 /// for blocks it is the ident followed by labels separated by null bytes.
 fn sort_key(structure: &Structure) -> String {
@@ -125,25 +156,66 @@ pub fn format_body(body: &mut Body, depth: usize) {
         }
     }
 
-    // Partition into single-line and multi-line groups
-    let (mut single_line, mut multi_line): (Vec<_>, Vec<_>) =
-        structures.into_iter().partition(|s| !is_multiline(s));
+    // 4-way partition: priority single/multi, then normal single/multi
+    let mut priority_single: Vec<Structure> = Vec::new();
+    let mut priority_multi: Vec<Structure> = Vec::new();
+    let mut normal_single: Vec<Structure> = Vec::new();
+    let mut normal_multi: Vec<Structure> = Vec::new();
 
-    // Sort each group alphabetically
-    single_line.sort_by_key(sort_key);
-    multi_line.sort_by_key(sort_key);
+    for s in structures {
+        if priority_index(&s).is_some() {
+            if is_multiline(&s) {
+                priority_multi.push(s);
+            } else {
+                priority_single.push(s);
+            }
+        } else if is_multiline(&s) {
+            normal_multi.push(s);
+        } else {
+            normal_single.push(s);
+        }
+    }
 
-    // Align `=` signs within the single-line attribute group
-    align_body_attributes(&mut single_line);
+    // Priority items sort by their predefined order
+    priority_single.sort_by_key(|s| priority_index(s).unwrap_or(usize::MAX));
+    priority_multi.sort_by_key(|s| priority_index(s).unwrap_or(usize::MAX));
 
-    // Rebuild body with correct spacing
-    let has_single = !single_line.is_empty();
-    for mut s in single_line {
+    // Normal items sort alphabetically
+    normal_single.sort_by_key(sort_key);
+    normal_multi.sort_by_key(sort_key);
+
+    // Align `=` signs independently within each single-line group
+    align_body_attributes(&mut priority_single);
+    align_body_attributes(&mut normal_single);
+
+    // Rebuild body: priority first, then normal, with appropriate spacing
+    let has_priority = !priority_single.is_empty() || !priority_multi.is_empty();
+    let has_priority_single = !priority_single.is_empty();
+
+    // 1. Priority single-line attrs (no blank lines between)
+    for mut s in priority_single {
         adjust_structure_prefix(&mut s, false, &indent);
         body.push(s);
     }
-    for (i, mut s) in multi_line.into_iter().enumerate() {
-        let want_blank = i > 0 || has_single;
+
+    // 2. Priority multi-line blocks (blank line before each)
+    for (i, mut s) in priority_multi.into_iter().enumerate() {
+        let want_blank = i > 0 || has_priority_single;
+        adjust_structure_prefix(&mut s, want_blank, &indent);
+        body.push(s);
+    }
+
+    // 3. Normal single-line attrs (blank line before first if priority existed)
+    let has_normal_single = !normal_single.is_empty();
+    for (i, mut s) in normal_single.into_iter().enumerate() {
+        let want_blank = i == 0 && has_priority;
+        adjust_structure_prefix(&mut s, want_blank, &indent);
+        body.push(s);
+    }
+
+    // 4. Normal multi-line attrs/blocks (blank line before each)
+    for (i, mut s) in normal_multi.into_iter().enumerate() {
+        let want_blank = i > 0 || has_normal_single || has_priority;
         adjust_structure_prefix(&mut s, want_blank, &indent);
         body.push(s);
     }

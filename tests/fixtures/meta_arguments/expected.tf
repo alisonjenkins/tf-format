@@ -1,4 +1,6 @@
 resource "aws_instance" "example" {
+  count = 3
+
   lifecycle {
     create_before_destroy = true
   }
@@ -6,14 +8,13 @@ resource "aws_instance" "example" {
   ami           = "ami-12345678"
   instance_type = "t2.micro"
   subnet_id     = "subnet-abc123"
+  tags          = { Name = "example" }
+}
 
-  ebs_block_device {
-    device_name = "/dev/sda1"
-    volume_size = 20
-  }
+module "vpc" {
+  source  = "terraform-aws-modules/vpc/aws"
+  version = "5.0.0"
 
-  tags = {
-    Environment = "dev"
-    Name        = "example"
-  }
+  cidr_block = "10.0.0.0/16"
+  name       = "my-vpc"
 }

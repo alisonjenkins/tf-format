@@ -59,3 +59,8 @@ fn fixture_idempotency() {
 fn fixture_alignment() {
     run_fixture("alignment");
 }
+
+#[test]
+fn fixture_meta_arguments() {
+    run_fixture("meta_arguments");
+}
