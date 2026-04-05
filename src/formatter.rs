@@ -235,6 +235,26 @@ fn format_expression(expr: &mut Expression, depth: usize) {
             format_object(obj, depth);
         }
     } else if let Some(arr) = expr.as_array_mut() {
+        // Multi-line arrays should always have a trailing comma so that
+        // adding a new entry only changes one line in the diff.
+        if is_multiline_array(arr) && !arr.is_empty() {
+            // When the input has no trailing comma, the parser stores the
+            // whitespace before `]` in the last element's suffix. Move it
+            // to the array's trailing so the comma lands on the right line.
+            let last_idx = arr.len() - 1;
+            if let Some(last) = arr.get_mut(last_idx) {
+                let suffix = last
+                    .decor()
+                    .suffix()
+                    .map(|s| s.to_string())
+                    .unwrap_or_default();
+                if suffix.contains('\n') {
+                    last.decor_mut().set_suffix("");
+                    arr.set_trailing(suffix);
+                }
+            }
+            arr.set_trailing_comma(true);
+        }
         for i in 0..arr.len() {
             if let Some(elem) = arr.get_mut(i) {
                 // Array elements are one nesting level deeper than the array itself
@@ -274,6 +294,17 @@ fn align_object_keys(entries: &mut [(ObjectKey, hcl_edit::expr::ObjectValue)]) {
         let padding = max_key_len - object_key_str(key).len() + 1;
         key.decor_mut().set_suffix(" ".repeat(padding));
     }
+}
+
+/// Check if an array is multi-line by looking at whether any element's prefix
+/// or the array's trailing contains a newline.
+fn is_multiline_array(arr: &hcl_edit::expr::Array) -> bool {
+    arr.trailing().to_string().contains('\n')
+        || arr.iter().any(|elem| {
+            elem.decor()
+                .prefix()
+                .is_some_and(|p| p.to_string().contains('\n'))
+        })
 }
 
 /// Check if an object is multi-line by looking at whether any key's prefix

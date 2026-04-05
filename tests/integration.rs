@@ -69,3 +69,13 @@ fn fixture_meta_arguments() {
 fn fixture_array_of_objects() {
     run_fixture("array_of_objects");
 }
+
+#[test]
+fn fixture_trailing_comma() {
+    run_fixture("trailing_comma");
+}
+
+#[test]
+fn fixture_list_order_preserved() {
+    run_fixture("list_order_preserved");
+}
