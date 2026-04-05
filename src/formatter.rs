@@ -237,7 +237,8 @@ fn format_expression(expr: &mut Expression, depth: usize) {
     } else if let Some(arr) = expr.as_array_mut() {
         for i in 0..arr.len() {
             if let Some(elem) = arr.get_mut(i) {
-                format_expression(elem, depth);
+                // Array elements are one nesting level deeper than the array itself
+                format_expression(elem, depth + 1);
             }
         }
     }
@@ -292,7 +293,6 @@ fn format_object(obj: &mut Object, depth: usize) {
 
     // Preserve object-level decor
     let obj_decor = obj.decor().clone();
-    let obj_trailing = obj.trailing().clone();
 
     // Drain all entries
     let old_obj = std::mem::take(obj);
@@ -336,9 +336,10 @@ fn format_object(obj: &mut Object, depth: usize) {
         is_first = false;
     }
 
-    // Restore object-level decor
+    // Restore object-level decor and normalize trailing indent (controls `}` position)
     *obj.decor_mut() = obj_decor;
-    obj.set_trailing(obj_trailing);
+    let closing_indent = "  ".repeat(depth);
+    obj.set_trailing(closing_indent);
 }
 
 /// Extract comment lines from an object key's prefix decor.

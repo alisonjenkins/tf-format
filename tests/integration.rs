@@ -64,3 +64,8 @@ fn fixture_alignment() {
 fn fixture_meta_arguments() {
     run_fixture("meta_arguments");
 }
+
+#[test]
+fn fixture_array_of_objects() {
+    run_fixture("array_of_objects");
+}
