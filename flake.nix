@@ -33,6 +33,7 @@
             rust-analyzer
             clippy
             rustfmt
+            opentofu
           ];
         };
       }
