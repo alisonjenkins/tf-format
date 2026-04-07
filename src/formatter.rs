@@ -1,5 +1,5 @@
 use hcl_edit::Decorate;
-use hcl_edit::expr::{Expression, Object, ObjectKey};
+use hcl_edit::expr::{Expression, Object, ObjectKey, ObjectValueTerminator};
 use hcl_edit::structure::{Body, Structure};
 
 use crate::classify::is_multiline;
@@ -425,11 +425,13 @@ fn format_object(obj: &mut Object, depth: usize) {
     // Re-insert in order: single-line first, then multi-line
     let has_single = !single.is_empty();
     let mut is_first = true;
+    let mut last_terminator = ObjectValueTerminator::Newline;
 
     for (mut key, value) in single {
         let comments = extract_key_comments(&key);
         let prefix = build_object_key_prefix(is_first, false, &comments, &indent);
         key.decor_mut().set_prefix(prefix);
+        last_terminator = value.terminator();
         obj.insert(key, value);
         is_first = false;
     }
@@ -438,14 +440,23 @@ fn format_object(obj: &mut Object, depth: usize) {
         let comments = extract_key_comments(&key);
         let prefix = build_object_key_prefix(is_first, want_blank, &comments, &indent);
         key.decor_mut().set_prefix(prefix);
+        last_terminator = value.terminator();
         obj.insert(key, value);
         is_first = false;
     }
 
-    // Restore object-level decor and normalize trailing indent (controls `}` position)
+    // Restore object-level decor and normalize trailing indent (controls `}` position).
+    // If the last entry's terminator is Newline, it already produces the
+    // newline before the closing `}`; otherwise (Comma or None) we have to
+    // prepend one ourselves so `}` doesn't end up on the same line as the
+    // last value.
     *obj.decor_mut() = obj_decor;
     let closing_indent = "  ".repeat(depth);
-    obj.set_trailing(closing_indent);
+    let trailing = match last_terminator {
+        ObjectValueTerminator::Newline => closing_indent,
+        _ => format!("\n{closing_indent}"),
+    };
+    obj.set_trailing(trailing);
 }
 
 /// Extract comment lines from an object key's prefix decor.
