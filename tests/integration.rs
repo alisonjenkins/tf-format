@@ -79,3 +79,8 @@ fn fixture_trailing_comma() {
 fn fixture_list_order_preserved() {
     run_fixture("list_order_preserved");
 }
+
+#[test]
+fn fixture_expand_wide_object() {
+    run_fixture("expand_wide_object");
+}
