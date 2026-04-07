@@ -151,6 +151,35 @@ fn parity_comment_breaks_alignment_group() {
 }
 
 #[test]
+fn parity_object_multiline_values_not_aligned() {
+    // Regression: multi-line object entries used to be aligned together,
+    // padding their keys to the longest key in the group. `tofu fmt` does
+    // not do this — each multi-line entry just gets a single space on
+    // either side of `=`. Keys here are intentionally varying length.
+    let input = r#"locals {
+  lambdas = {
+    lambda-hello-world = {
+      lambda = true
+    }
+
+    lambda-manage-dns = {
+      lambda = true
+    }
+
+    lambda-redwood-guild-servers = {
+      lambda = true
+    }
+
+    portal-alison-jenkins-com-api = {
+      lambda = true
+    }
+  }
+}
+"#;
+    check_parity("object_multiline_values_not_aligned", input);
+}
+
+#[test]
 fn parity_object_quoted_string_keys() {
     // Regression: `ObjectKey::Expression` (quoted-string keys) used to be
     // measured *with* their decor whitespace included, which made alignment
