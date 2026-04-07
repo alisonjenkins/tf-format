@@ -266,7 +266,34 @@ fn format_expression(expr: &mut Expression, depth: usize) {
 
 /// Vertically align the `=` signs of consecutive single-line attributes in a
 /// body by padding the key's decor suffix.
+///
+/// Matches `terraform fmt` / `tofu fmt` semantics: a comment line attached to
+/// an attribute breaks the alignment group, so attributes above and below the
+/// comment are aligned independently. (tf-format never inserts blank lines
+/// within a single-line attribute sequence, so blank lines are not a concern
+/// here.)
 fn align_body_attributes(structures: &mut [Structure]) {
+    let mut start = 0;
+    while start < structures.len() {
+        let mut end = start + 1;
+        while end < structures.len() {
+            let prefix = structures[end]
+                .decor()
+                .prefix()
+                .map(|p| p.to_string())
+                .unwrap_or_default();
+            if !extract_comments(&prefix).is_empty() {
+                break;
+            }
+            end += 1;
+        }
+        align_body_attribute_group(&mut structures[start..end]);
+        start = end;
+    }
+}
+
+/// Align a single contiguous group of attributes (no comments between them).
+fn align_body_attribute_group(structures: &mut [Structure]) {
     let max_key_len = structures
         .iter()
         .filter_map(|s| s.as_attribute().map(|a| a.key.as_str().len()))
@@ -277,22 +304,45 @@ fn align_body_attributes(structures: &mut [Structure]) {
         if let Structure::Attribute(attr) = s {
             let padding = max_key_len - attr.key.as_str().len() + 1;
             attr.key.decor_mut().set_suffix(" ".repeat(padding));
+            // Normalize whitespace after `=` to a single space, matching
+            // `terraform fmt` / `tofu fmt`. The value's prefix decor holds
+            // the whitespace between `=` and the value.
+            attr.value.decor_mut().set_prefix(" ");
         }
     }
 }
 
 /// Vertically align the `=` signs of object key entries by padding the key's
-/// decor suffix.
+/// decor suffix. A comment attached to an entry breaks the alignment group,
+/// matching `terraform fmt` / `tofu fmt`.
 fn align_object_keys(entries: &mut [(ObjectKey, hcl_edit::expr::ObjectValue)]) {
+    let mut start = 0;
+    while start < entries.len() {
+        let mut end = start + 1;
+        while end < entries.len() {
+            if !extract_key_comments(&entries[end].0).is_empty() {
+                break;
+            }
+            end += 1;
+        }
+        align_object_key_group(&mut entries[start..end]);
+        start = end;
+    }
+}
+
+fn align_object_key_group(entries: &mut [(ObjectKey, hcl_edit::expr::ObjectValue)]) {
     let max_key_len = entries
         .iter()
         .map(|(k, _)| object_key_str(k).len())
         .max()
         .unwrap_or(0);
 
-    for (key, _) in entries.iter_mut() {
+    for (key, value) in entries.iter_mut() {
         let padding = max_key_len - object_key_str(key).len() + 1;
         key.decor_mut().set_suffix(" ".repeat(padding));
+        // Normalize whitespace after `=` to a single space, matching
+        // `terraform fmt` / `tofu fmt`.
+        value.expr_mut().decor_mut().set_prefix(" ");
     }
 }
 
