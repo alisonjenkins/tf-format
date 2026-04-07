@@ -151,6 +151,53 @@ fn parity_comment_breaks_alignment_group() {
 }
 
 #[test]
+fn parity_array_of_inline_object_with_nested_objects() {
+    // Regression: `rules = [{ ... }]` (object's `{` on the array's `[` line)
+    // used to over-indent every line inside the object by 2sp, because the
+    // array branch unconditionally added a depth level for elements. The
+    // inline form should behave as if `rules = { ... }` — same depth as the
+    // array itself.
+    let input = r#"resource "cloudflare_ruleset" "x" {
+  rules = [{
+    action      = "rewrite"
+    description = "Prepend /file/x to URI"
+    enabled     = true
+    expression  = "(http.host eq \"example.com\")"
+
+    action_parameters = {
+      uri = {
+        path = {
+          expression = "concat(\"/file/x\", http.request.uri.path)"
+        }
+      }
+    }
+  }]
+}
+"#;
+    check_parity("array_of_inline_object_with_nested_objects", input);
+}
+
+#[test]
+fn parity_array_of_objects_multiline_form() {
+    // Smoke test: the canonical multi-line array-of-objects form should
+    // still receive an extra depth level (each element on its own line).
+    let input = r#"resource "x" "y" {
+  rules = [
+    {
+      bar = "b"
+      foo = "a"
+    },
+    {
+      bar = "d"
+      foo = "c"
+    },
+  ]
+}
+"#;
+    check_parity("array_of_objects_multiline_form", input);
+}
+
+#[test]
 fn parity_object_multiline_values_not_aligned() {
     // Regression: multi-line object entries used to be aligned together,
     // padding their keys to the longest key in the group. `tofu fmt` does
