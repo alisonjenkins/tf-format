@@ -34,6 +34,7 @@
             clippy
             rustfmt
             opentofu
+            cargo-deny
           ];
         };
       }
