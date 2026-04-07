@@ -5,16 +5,19 @@ on:
     branches: [main, master]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/nix-installer-action@b66b36319cc6fde4ea85edd583b088c65d6b8710 # main
 
-      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@1828eb4e5414b8dfe36daae53ea3e4b8c3fdec7a # main
 
       - name: Build
         run: nix build
