@@ -198,6 +198,34 @@ fn parity_array_of_objects_multiline_form() {
 }
 
 #[test]
+fn parity_object_of_objects_with_trailing_commas() {
+    // Regression: when each entry of an object is itself a multi-line
+    // object terminated with a comma, the closing `}` of the outer object
+    // used to be glued onto the same line as the last inner `}` (e.g.
+    // `},  }`) because the trailing decoration was just whitespace, with
+    // no newline. The terminator-aware fix now prepends `\n` when the last
+    // entry's terminator isn't already a newline.
+    let input = r#"locals {
+  github_actions_roles = {
+    aaa = {
+      bar = "2"
+      foo = "1"
+    },
+    bbb = {
+      bar = "4"
+      foo = "3"
+    },
+    ccc = {
+      bar = "6"
+      foo = "5"
+    },
+  }
+}
+"#;
+    check_parity("object_of_objects_with_trailing_commas", input);
+}
+
+#[test]
 fn parity_object_multiline_values_not_aligned() {
     // Regression: multi-line object entries used to be aligned together,
     // padding their keys to the longest key in the group. `tofu fmt` does
