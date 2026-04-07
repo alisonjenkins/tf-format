@@ -240,8 +240,10 @@ pub fn format_body(body: &mut Body, depth: usize) {
 /// into nested objects within arrays.
 fn format_expression(expr: &mut Expression, depth: usize) {
     if let Some(obj) = expr.as_object_mut() {
-        // Only format multi-line objects; leave inline objects untouched
-        if is_multiline_object(obj) {
+        // Format multi-line objects, and also expand any single-line object
+        // whose rendered width exceeds the line-length budget so we don't
+        // emit huge unreadable one-liners.
+        if is_multiline_object(obj) || should_expand_single_line_object(obj, depth) {
             format_object(obj, depth);
         }
     } else if let Some(arr) = expr.as_array_mut() {
@@ -377,6 +379,28 @@ fn is_multiline_array(arr: &hcl_edit::expr::Array) -> bool {
         })
 }
 
+/// Maximum line width before a single-line object literal gets expanded
+/// onto multiple lines. Matches the conventional Terraform/HCL line budget.
+const MAX_LINE_WIDTH: usize = 80;
+
+/// Decide whether a currently single-line object should be expanded onto
+/// multiple lines. Triggers when there's more than one entry and the
+/// rendered single-line form (including the leading attribute indent)
+/// would exceed `MAX_LINE_WIDTH`.
+fn should_expand_single_line_object(obj: &Object, depth: usize) -> bool {
+    if is_multiline_object(obj) {
+        return false;
+    }
+    if obj.iter().count() < 2 {
+        return false;
+    }
+    // Object doesn't implement Display directly; wrap it in an Expression
+    // (which does) to render the single-line form for measurement.
+    let rendered = Expression::Object(obj.clone()).to_string();
+    let line_width = depth * 2 + rendered.len();
+    line_width > MAX_LINE_WIDTH
+}
+
 /// Check if an object is multi-line by looking at whether any key's prefix
 /// contains a newline (indicating the object spans multiple lines).
 fn is_multiline_object(obj: &Object) -> bool {
@@ -428,8 +452,14 @@ fn format_object(obj: &mut Object, depth: usize) {
     let mut last_terminator = ObjectValueTerminator::Newline;
 
     for (mut key, value) in single {
+        // If the previous entry's terminator wasn't a newline (e.g. an
+        // expanded one-liner whose entries used `,` or had no terminator at
+        // all), we have to inject the line break ourselves via the prefix.
+        let needs_leading_newline =
+            !is_first && !matches!(last_terminator, ObjectValueTerminator::Newline);
         let comments = extract_key_comments(&key);
-        let prefix = build_object_key_prefix(is_first, false, &comments, &indent);
+        let prefix =
+            build_object_key_prefix(is_first || needs_leading_newline, false, &comments, &indent);
         key.decor_mut().set_prefix(prefix);
         last_terminator = value.terminator();
         obj.insert(key, value);
