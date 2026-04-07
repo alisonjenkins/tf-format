@@ -267,8 +267,18 @@ fn format_expression(expr: &mut Expression, depth: usize) {
         }
         for i in 0..arr.len() {
             if let Some(elem) = arr.get_mut(i) {
-                // Array elements are one nesting level deeper than the array itself
-                format_expression(elem, depth + 1);
+                // If the element shares a line with the array's `[` (no
+                // newline in its prefix), the inline form `[{ ... }]` makes
+                // the object behave as if it were a direct attribute value
+                // at the array's own depth. Otherwise the canonical multi-
+                // line form puts each element one level deeper than the
+                // array.
+                let elem_inline = elem
+                    .decor()
+                    .prefix()
+                    .is_none_or(|p| !p.to_string().contains('\n'));
+                let elem_depth = if elem_inline { depth } else { depth + 1 };
+                format_expression(elem, elem_depth);
             }
         }
     }
