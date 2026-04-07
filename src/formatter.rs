@@ -52,10 +52,20 @@ fn sort_key(structure: &Structure) -> String {
 }
 
 /// Extract a sort key string from an ObjectKey.
+///
+/// For `ObjectKey::Expression`, `to_string()` would include the expression's
+/// decor (surrounding whitespace from the source), so we clone and clear the
+/// decor first to get just the bare expression. This is critical for `=`
+/// alignment, which uses the returned string's length to compute padding.
 fn object_key_str(key: &ObjectKey) -> String {
     match key {
         ObjectKey::Ident(ident) => ident.as_str().to_string(),
-        ObjectKey::Expression(expr) => expr.to_string(),
+        ObjectKey::Expression(expr) => {
+            let mut bare = expr.clone();
+            bare.decor_mut().set_prefix("");
+            bare.decor_mut().set_suffix("");
+            bare.to_string()
+        }
     }
 }
 
