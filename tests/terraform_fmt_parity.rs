@@ -151,6 +151,23 @@ fn parity_comment_breaks_alignment_group() {
 }
 
 #[test]
+fn parity_object_quoted_string_keys() {
+    // Regression: `ObjectKey::Expression` (quoted-string keys) used to be
+    // measured *with* their decor whitespace included, which made alignment
+    // padding completely wrong for any object that used quoted keys.
+    let input = r#"variable "regions" {
+  default = {
+    "eu-west-1" = {
+      "cidr_block"  =   "10.0.0.0/16"
+      "enabled" =     true
+    }
+  }
+}
+"#;
+    check_parity("object_quoted_string_keys", input);
+}
+
+#[test]
 fn parity_object_comment_breaks_alignment_group() {
     let input = r#"resource "aws_instance" "example" {
   tags = {
