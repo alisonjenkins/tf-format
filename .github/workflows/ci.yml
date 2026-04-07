@@ -12,27 +12,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Check formatting
-        run: cargo fmt --check
-
-      - name: Clippy
-        run: cargo clippy -- -D warnings
-
-      - name: Run tests
-        run: cargo test
-
-  nix-build:
-    name: Nix Build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
       - uses: DeterminateSystems/nix-installer-action@main
 
       - uses: DeterminateSystems/magic-nix-cache-action@main
@@ -40,5 +19,11 @@ jobs:
       - name: Build
         run: nix build
 
-      - name: Run tests via nix
+      - name: Check formatting
+        run: nix develop --command cargo fmt --check
+
+      - name: Clippy
+        run: nix develop --command cargo clippy -- -D warnings
+
+      - name: Run tests
         run: nix develop --command cargo test
