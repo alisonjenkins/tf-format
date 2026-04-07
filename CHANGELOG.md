@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.1](https://github.com/alisonjenkins/tf-format/compare/v0.2.0...v0.2.1) (2026-04-07)
+
+
+### Bug Fixes
+
+* **ci:** cross-compile darwin with cargo-zigbuild ([7f686b5](https://github.com/alisonjenkins/tf-format/commit/7f686b50571203e7f26d06d5a7d33b7edb51a519))
+* **ci:** dispatch release workflow from release-please ([c274cf0](https://github.com/alisonjenkins/tf-format/commit/c274cf0b6fcd69d11687b620db9444d5d86a6752))
+
 ## [0.2.0](https://github.com/alisonjenkins/tf-format/compare/v0.1.0...v0.2.0) (2026-04-07)
 
 
