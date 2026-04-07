@@ -403,9 +403,14 @@ fn format_object(obj: &mut Object, depth: usize) {
     single.sort_by(|(a, _), (b, _)| object_key_str(a).cmp(&object_key_str(b)));
     multi.sort_by(|(a, _), (b, _)| object_key_str(a).cmp(&object_key_str(b)));
 
-    // Align `=` signs within each group
+    // Align `=` signs only within the single-line group. `tofu fmt` does not
+    // align `=` for multi-line values; each multi-line entry just gets a
+    // single space on either side of `=`.
     align_object_keys(&mut single);
-    align_object_keys(&mut multi);
+    for (key, value) in multi.iter_mut() {
+        key.decor_mut().set_suffix(" ");
+        value.expr_mut().decor_mut().set_prefix(" ");
+    }
 
     // Re-insert in order: single-line first, then multi-line
     let has_single = !single.is_empty();
