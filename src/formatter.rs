@@ -69,6 +69,24 @@ fn object_key_str(key: &ObjectKey) -> String {
     }
 }
 
+/// Check whether a decor prefix string contains a blank line, which acts as
+/// an alignment group separator in `terraform fmt` / `tofu fmt`.
+///
+/// When the previous entry's terminator is `Newline`, the `\n` ending the
+/// previous line comes from the terminator — so a single leading `\n` in the
+/// prefix represents a blank line. When the terminator is `Comma` (or None),
+/// there is no automatic newline, so a single leading `\n` is just the
+/// line-break and a blank line requires `\n\n`.
+fn has_blank_line_after_newline_terminator(prefix: &str) -> bool {
+    prefix.starts_with('\n') || prefix.contains("\n\n")
+}
+
+/// Detect a blank line in a prefix when the previous entry may use a
+/// non-Newline terminator (e.g. Comma). Only `\n\n` counts.
+fn has_blank_line_after_other_terminator(prefix: &str) -> bool {
+    prefix.contains("\n\n")
+}
+
 /// Extract comment lines from a decor prefix string.
 fn extract_comments(prefix: &str) -> Vec<String> {
     prefix
@@ -142,6 +160,8 @@ fn adjust_structure_prefix(structure: &mut Structure, want_blank_line: bool, ind
 /// 2. Multi-line attributes and blocks mixed together (sorted alphabetically,
 ///    blank line between each)
 /// 3. Recurse into nested blocks and object expressions.
+/// 4. Blank-line-separated groups in the original source are preserved and
+///    each group is sorted/aligned independently.
 pub fn format_body(body: &mut Body, depth: usize) {
     let indent = "  ".repeat(depth + 1);
 
@@ -166,74 +186,118 @@ pub fn format_body(body: &mut Body, depth: usize) {
         }
     }
 
-    // 4-way partition: priority single/multi, then normal single/multi
-    let mut priority_single: Vec<Structure> = Vec::new();
-    let mut priority_multi: Vec<Structure> = Vec::new();
-    let mut normal_single: Vec<Structure> = Vec::new();
-    let mut normal_multi: Vec<Structure> = Vec::new();
+    // Split into blank-line-separated groups, then process each group
+    // independently through the 4-tier partition.
+    let groups = split_body_groups(structures);
+    let num_groups = groups.len();
+    let mut any_emitted = false;
 
-    for s in structures {
-        if priority_index(&s).is_some() {
-            if is_multiline(&s) {
-                priority_multi.push(s);
+    for (group_idx, group_structures) in groups.into_iter().enumerate() {
+        // 4-way partition: priority single/multi, then normal single/multi
+        let mut priority_single: Vec<Structure> = Vec::new();
+        let mut priority_multi: Vec<Structure> = Vec::new();
+        let mut normal_single: Vec<Structure> = Vec::new();
+        let mut normal_multi: Vec<Structure> = Vec::new();
+
+        for s in group_structures {
+            if priority_index(&s).is_some() {
+                if is_multiline(&s) {
+                    priority_multi.push(s);
+                } else {
+                    priority_single.push(s);
+                }
+            } else if is_multiline(&s) {
+                normal_multi.push(s);
             } else {
-                priority_single.push(s);
+                normal_single.push(s);
             }
-        } else if is_multiline(&s) {
-            normal_multi.push(s);
-        } else {
-            normal_single.push(s);
         }
-    }
 
-    // Priority items sort by their predefined order
-    priority_single.sort_by_key(|s| priority_index(s).unwrap_or(usize::MAX));
-    priority_multi.sort_by_key(|s| priority_index(s).unwrap_or(usize::MAX));
+        // Priority items sort by their predefined order
+        priority_single.sort_by_key(|s| priority_index(s).unwrap_or(usize::MAX));
+        priority_multi.sort_by_key(|s| priority_index(s).unwrap_or(usize::MAX));
 
-    // Normal items sort alphabetically
-    normal_single.sort_by_key(sort_key);
-    normal_multi.sort_by_key(sort_key);
+        // Normal items sort alphabetically
+        normal_single.sort_by_key(sort_key);
+        normal_multi.sort_by_key(sort_key);
 
-    // Align `=` signs independently within each single-line group
-    align_body_attributes(&mut priority_single);
-    align_body_attributes(&mut normal_single);
+        // Align `=` signs independently within each single-line partition
+        align_body_attributes(&mut priority_single);
+        align_body_attributes(&mut normal_single);
 
-    // Rebuild body: priority first, then normal, with appropriate spacing
-    let has_priority = !priority_single.is_empty() || !priority_multi.is_empty();
-    let has_priority_single = !priority_single.is_empty();
+        // Rebuild body: priority first, then normal, with appropriate spacing.
+        // Insert a blank line before the first item of a new group (except the
+        // very first group).
+        let has_priority = !priority_single.is_empty() || !priority_multi.is_empty();
+        let has_priority_single = !priority_single.is_empty();
+        let want_group_blank = any_emitted && group_idx > 0 && group_idx < num_groups;
 
-    // 1. Priority single-line attrs (no blank lines between)
-    for mut s in priority_single {
-        adjust_structure_prefix(&mut s, false, &indent);
-        body.push(s);
-    }
+        // 1. Priority single-line attrs (no blank lines between)
+        for (i, mut s) in priority_single.into_iter().enumerate() {
+            let want_blank = if i == 0 { want_group_blank } else { false };
+            adjust_structure_prefix(&mut s, want_blank, &indent);
+            body.push(s);
+            any_emitted = true;
+        }
 
-    // 2. Priority multi-line blocks (blank line before each)
-    for (i, mut s) in priority_multi.into_iter().enumerate() {
-        let want_blank = i > 0 || has_priority_single;
-        adjust_structure_prefix(&mut s, want_blank, &indent);
-        body.push(s);
-    }
+        // 2. Priority multi-line blocks (blank line before each)
+        for (i, mut s) in priority_multi.into_iter().enumerate() {
+            let want_blank =
+                i > 0 || has_priority_single || (i == 0 && want_group_blank);
+            adjust_structure_prefix(&mut s, want_blank, &indent);
+            body.push(s);
+            any_emitted = true;
+        }
 
-    // 3. Normal single-line attrs (blank line before first if priority existed)
-    let has_normal_single = !normal_single.is_empty();
-    for (i, mut s) in normal_single.into_iter().enumerate() {
-        let want_blank = i == 0 && has_priority;
-        adjust_structure_prefix(&mut s, want_blank, &indent);
-        body.push(s);
-    }
+        // 3. Normal single-line attrs (blank line before first if priority existed)
+        let has_normal_single = !normal_single.is_empty();
+        for (i, mut s) in normal_single.into_iter().enumerate() {
+            let want_blank = i == 0 && (has_priority || want_group_blank);
+            adjust_structure_prefix(&mut s, want_blank, &indent);
+            body.push(s);
+            any_emitted = true;
+        }
 
-    // 4. Normal multi-line attrs/blocks (blank line before each)
-    for (i, mut s) in normal_multi.into_iter().enumerate() {
-        let want_blank = i > 0 || has_normal_single || has_priority;
-        adjust_structure_prefix(&mut s, want_blank, &indent);
-        body.push(s);
+        // 4. Normal multi-line attrs/blocks (blank line before each)
+        for (i, mut s) in normal_multi.into_iter().enumerate() {
+            let want_blank =
+                i > 0 || has_normal_single || has_priority || (i == 0 && want_group_blank);
+            adjust_structure_prefix(&mut s, want_blank, &indent);
+            body.push(s);
+            any_emitted = true;
+        }
     }
 
     // Restore body-level metadata
     *body.decor_mut() = body_decor;
     body.set_prefer_oneline(prefer_oneline);
     body.set_prefer_omit_trailing_newline(prefer_omit_trailing_newline);
+}
+
+/// Split body structures into groups separated by blank lines. The Body
+/// encoding adds `\n` between structures (like a Newline terminator), so a
+/// blank line shows up as a leading `\n` in the structure's prefix.
+fn split_body_groups(structures: Vec<Structure>) -> Vec<Vec<Structure>> {
+    let mut groups: Vec<Vec<Structure>> = Vec::new();
+    let mut current: Vec<Structure> = Vec::new();
+
+    for (i, s) in structures.into_iter().enumerate() {
+        if i > 0 && !current.is_empty() {
+            let prefix = s
+                .decor()
+                .prefix()
+                .map(|p| p.to_string())
+                .unwrap_or_default();
+            if has_blank_line_after_newline_terminator(&prefix) {
+                groups.push(std::mem::take(&mut current));
+            }
+        }
+        current.push(s);
+    }
+    if !current.is_empty() {
+        groups.push(current);
+    }
+    groups
 }
 
 /// Recursively format an expression in-place. Sorts object keys and recurses
@@ -326,10 +390,8 @@ fn format_expression(expr: &mut Expression, depth: usize) {
 /// body by padding the key's decor suffix.
 ///
 /// Matches `terraform fmt` / `tofu fmt` semantics: a comment line attached to
-/// an attribute breaks the alignment group, so attributes above and below the
-/// comment are aligned independently. (tf-format never inserts blank lines
-/// within a single-line attribute sequence, so blank lines are not a concern
-/// here.)
+/// an attribute breaks the alignment group. Blank-line groups are handled
+/// upstream by `split_body_groups`.
 fn align_body_attributes(structures: &mut [Structure]) {
     let mut start = 0;
     while start < structures.len() {
@@ -372,7 +434,8 @@ fn align_body_attribute_group(structures: &mut [Structure]) {
 
 /// Vertically align the `=` signs of object key entries by padding the key's
 /// decor suffix. A comment attached to an entry breaks the alignment group,
-/// matching `terraform fmt` / `tofu fmt`.
+/// matching `terraform fmt` / `tofu fmt`. Blank-line groups are already
+/// handled by `split_object_groups`.
 fn align_object_keys(entries: &mut [(ObjectKey, hcl_edit::expr::ObjectValue)]) {
     let mut start = 0;
     while start < entries.len() {
@@ -448,7 +511,8 @@ fn is_multiline_object(obj: &Object) -> bool {
 }
 
 /// Sort the keys of an HCL object in-place, applying the same single-line-first
-/// then multi-line rules.
+/// then multi-line rules. Blank-line-separated groups are preserved and each
+/// group is sorted/aligned independently, matching `terraform fmt` / `tofu fmt`.
 fn format_object(obj: &mut Object, depth: usize) {
     let indent = "  ".repeat(depth + 1);
 
@@ -464,51 +528,67 @@ fn format_object(obj: &mut Object, depth: usize) {
         format_expression(value.expr_mut(), depth + 1);
     }
 
-    // Partition into single-line and multi-line
-    let (mut single, mut multi): (Vec<_>, Vec<_>) = entries
-        .into_iter()
-        .partition(|(_, v)| !v.expr().to_string().contains('\n'));
+    // Split entries into blank-line-separated groups. Each group will be
+    // sorted and aligned independently.
+    let groups = split_object_groups(entries);
 
-    // Sort each group
-    single.sort_by(|(a, _), (b, _)| object_key_str(a).cmp(&object_key_str(b)));
-    multi.sort_by(|(a, _), (b, _)| object_key_str(a).cmp(&object_key_str(b)));
-
-    // Align `=` signs only within the single-line group. `tofu fmt` does not
-    // align `=` for multi-line values; each multi-line entry just gets a
-    // single space on either side of `=`.
-    align_object_keys(&mut single);
-    for (key, value) in multi.iter_mut() {
-        key.decor_mut().set_suffix(" ");
-        value.expr_mut().decor_mut().set_prefix(" ");
-    }
-
-    // Re-insert in order: single-line first, then multi-line
-    let has_single = !single.is_empty();
+    // Process each group: partition single/multi, sort, align, re-insert.
     let mut is_first = true;
     let mut last_terminator = ObjectValueTerminator::Newline;
 
-    for (mut key, value) in single {
-        // If the previous entry's terminator wasn't a newline (e.g. an
-        // expanded one-liner whose entries used `,` or had no terminator at
-        // all), we have to inject the line break ourselves via the prefix.
-        let needs_leading_newline =
-            !is_first && !matches!(last_terminator, ObjectValueTerminator::Newline);
-        let comments = extract_key_comments(&key);
-        let prefix =
-            build_object_key_prefix(is_first || needs_leading_newline, false, &comments, &indent);
-        key.decor_mut().set_prefix(prefix);
-        last_terminator = value.terminator();
-        obj.insert(key, value);
-        is_first = false;
-    }
-    for (i, (mut key, value)) in multi.into_iter().enumerate() {
-        let want_blank = i > 0 || has_single;
-        let comments = extract_key_comments(&key);
-        let prefix = build_object_key_prefix(is_first, want_blank, &comments, &indent);
-        key.decor_mut().set_prefix(prefix);
-        last_terminator = value.terminator();
-        obj.insert(key, value);
-        is_first = false;
+    for (group_idx, group_entries) in groups.into_iter().enumerate() {
+        // Whether this group needs a blank line before its first entry.
+        let need_group_blank = !is_first && group_idx > 0;
+        let mut group_blank_emitted = false;
+
+        // Partition into single-line and multi-line
+        let (mut single, mut multi): (Vec<_>, Vec<_>) = group_entries
+            .into_iter()
+            .partition(|(_, v)| !v.expr().to_string().contains('\n'));
+
+        // Sort each partition
+        single.sort_by(|(a, _), (b, _)| object_key_str(a).cmp(&object_key_str(b)));
+        multi.sort_by(|(a, _), (b, _)| object_key_str(a).cmp(&object_key_str(b)));
+
+        // Align `=` signs only within the single-line partition. `tofu fmt`
+        // does not align `=` for multi-line values; each multi-line entry
+        // just gets a single space on either side of `=`.
+        align_object_keys(&mut single);
+        for (key, value) in multi.iter_mut() {
+            key.decor_mut().set_suffix(" ");
+            value.expr_mut().decor_mut().set_prefix(" ");
+        }
+
+        let has_single = !single.is_empty();
+
+        for (mut key, value) in single {
+            let needs_leading_newline =
+                !is_first && !matches!(last_terminator, ObjectValueTerminator::Newline);
+            let want_blank = need_group_blank && !group_blank_emitted;
+            let comments = extract_key_comments(&key);
+            let prefix = build_object_key_prefix(
+                is_first || needs_leading_newline,
+                want_blank,
+                &comments,
+                &indent,
+            );
+            key.decor_mut().set_prefix(prefix);
+            last_terminator = value.terminator();
+            obj.insert(key, value);
+            is_first = false;
+            group_blank_emitted = true;
+        }
+        for (i, (mut key, value)) in multi.into_iter().enumerate() {
+            let want_blank = (i > 0 || has_single)
+                || (need_group_blank && !group_blank_emitted);
+            let comments = extract_key_comments(&key);
+            let prefix = build_object_key_prefix(is_first, want_blank, &comments, &indent);
+            key.decor_mut().set_prefix(prefix);
+            last_terminator = value.terminator();
+            obj.insert(key, value);
+            is_first = false;
+            group_blank_emitted = true;
+        }
     }
 
     // Restore object-level decor and normalize trailing indent (controls `}` position).
@@ -524,6 +604,43 @@ fn format_object(obj: &mut Object, depth: usize) {
     };
     obj.set_trailing(trailing);
 }
+
+/// Split object entries into groups separated by blank lines. Uses the
+/// previous entry's terminator to determine whether a single `\n` in the
+/// prefix is a line-break or a blank line.
+fn split_object_groups(
+    entries: Vec<(ObjectKey, hcl_edit::expr::ObjectValue)>,
+) -> Vec<Vec<(ObjectKey, hcl_edit::expr::ObjectValue)>> {
+    let mut groups: Vec<Vec<(ObjectKey, hcl_edit::expr::ObjectValue)>> = Vec::new();
+    let mut current: Vec<(ObjectKey, hcl_edit::expr::ObjectValue)> = Vec::new();
+
+    for (i, entry) in entries.into_iter().enumerate() {
+        if i > 0 && !current.is_empty() {
+            let prefix = entry
+                .0
+                .decor()
+                .prefix()
+                .map(|p| p.to_string())
+                .unwrap_or_default();
+            let prev_terminator = current.last().map(|(_, v)| v.terminator());
+            let is_blank = match prev_terminator {
+                Some(ObjectValueTerminator::Newline) => {
+                    has_blank_line_after_newline_terminator(&prefix)
+                }
+                _ => has_blank_line_after_other_terminator(&prefix),
+            };
+            if is_blank {
+                groups.push(std::mem::take(&mut current));
+            }
+        }
+        current.push(entry);
+    }
+    if !current.is_empty() {
+        groups.push(current);
+    }
+    groups
+}
+
 
 /// Extract comment lines from an object key's prefix decor.
 fn extract_key_comments(key: &ObjectKey) -> Vec<String> {

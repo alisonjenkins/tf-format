@@ -84,3 +84,13 @@ fn fixture_list_order_preserved() {
 fn fixture_expand_wide_object() {
     run_fixture("expand_wide_object");
 }
+
+#[test]
+fn fixture_func_call_object() {
+    run_fixture("func_call_object");
+}
+
+#[test]
+fn fixture_blank_line_groups() {
+    run_fixture("blank_line_groups");
+}
