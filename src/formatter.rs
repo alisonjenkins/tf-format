@@ -237,52 +237,88 @@ pub fn format_body(body: &mut Body, depth: usize) {
 }
 
 /// Recursively format an expression in-place. Sorts object keys and recurses
-/// into nested objects within arrays.
+/// into nested objects, arrays, function call arguments, and other compound
+/// expressions.
 fn format_expression(expr: &mut Expression, depth: usize) {
-    if let Some(obj) = expr.as_object_mut() {
-        // Format multi-line objects, and also expand any single-line object
-        // whose rendered width exceeds the line-length budget so we don't
-        // emit huge unreadable one-liners.
-        if is_multiline_object(obj) || should_expand_single_line_object(obj, depth) {
-            format_object(obj, depth);
+    match expr {
+        Expression::Object(obj) => {
+            // Format multi-line objects, and also expand any single-line object
+            // whose rendered width exceeds the line-length budget so we don't
+            // emit huge unreadable one-liners.
+            if is_multiline_object(obj) || should_expand_single_line_object(obj, depth) {
+                format_object(obj, depth);
+            }
         }
-    } else if let Some(arr) = expr.as_array_mut() {
-        // Multi-line arrays should always have a trailing comma so that
-        // adding a new entry only changes one line in the diff.
-        if is_multiline_array(arr) && !arr.is_empty() {
-            // When the input has no trailing comma, the parser stores the
-            // whitespace before `]` in the last element's suffix. Move it
-            // to the array's trailing so the comma lands on the right line.
-            let last_idx = arr.len() - 1;
-            if let Some(last) = arr.get_mut(last_idx) {
-                let suffix = last
-                    .decor()
-                    .suffix()
-                    .map(|s| s.to_string())
-                    .unwrap_or_default();
-                if suffix.contains('\n') {
-                    last.decor_mut().set_suffix("");
-                    arr.set_trailing(suffix);
+        Expression::Array(arr) => {
+            // Multi-line arrays should always have a trailing comma so that
+            // adding a new entry only changes one line in the diff.
+            if is_multiline_array(arr) && !arr.is_empty() {
+                // When the input has no trailing comma, the parser stores the
+                // whitespace before `]` in the last element's suffix. Move it
+                // to the array's trailing so the comma lands on the right line.
+                let last_idx = arr.len() - 1;
+                if let Some(last) = arr.get_mut(last_idx) {
+                    let suffix = last
+                        .decor()
+                        .suffix()
+                        .map(|s| s.to_string())
+                        .unwrap_or_default();
+                    if suffix.contains('\n') {
+                        last.decor_mut().set_suffix("");
+                        arr.set_trailing(suffix);
+                    }
+                }
+                arr.set_trailing_comma(true);
+            }
+            for i in 0..arr.len() {
+                if let Some(elem) = arr.get_mut(i) {
+                    // If the element shares a line with the array's `[` (no
+                    // newline in its prefix), the inline form `[{ ... }]` makes
+                    // the object behave as if it were a direct attribute value
+                    // at the array's own depth. Otherwise the canonical multi-
+                    // line form puts each element one level deeper than the
+                    // array.
+                    let elem_inline = elem
+                        .decor()
+                        .prefix()
+                        .is_none_or(|p| !p.to_string().contains('\n'));
+                    let elem_depth = if elem_inline { depth } else { depth + 1 };
+                    format_expression(elem, elem_depth);
                 }
             }
-            arr.set_trailing_comma(true);
         }
-        for i in 0..arr.len() {
-            if let Some(elem) = arr.get_mut(i) {
-                // If the element shares a line with the array's `[` (no
-                // newline in its prefix), the inline form `[{ ... }]` makes
-                // the object behave as if it were a direct attribute value
-                // at the array's own depth. Otherwise the canonical multi-
-                // line form puts each element one level deeper than the
-                // array.
-                let elem_inline = elem
-                    .decor()
-                    .prefix()
-                    .is_none_or(|p| !p.to_string().contains('\n'));
-                let elem_depth = if elem_inline { depth } else { depth + 1 };
-                format_expression(elem, elem_depth);
+        Expression::FuncCall(call) => {
+            for arg in call.args.iter_mut() {
+                format_expression(arg, depth);
             }
         }
+        Expression::Parenthesis(paren) => {
+            format_expression(paren.inner_mut(), depth);
+        }
+        Expression::Conditional(cond) => {
+            format_expression(&mut cond.cond_expr, depth);
+            format_expression(&mut cond.true_expr, depth);
+            format_expression(&mut cond.false_expr, depth);
+        }
+        Expression::Traversal(trav) => {
+            format_expression(&mut trav.expr, depth);
+        }
+        Expression::ForExpr(for_expr) => {
+            format_expression(&mut for_expr.intro.collection_expr, depth);
+            if let Some(key_expr) = &mut for_expr.key_expr {
+                format_expression(key_expr, depth);
+            }
+            format_expression(&mut for_expr.value_expr, depth);
+        }
+        Expression::UnaryOp(op) => {
+            format_expression(&mut op.expr, depth);
+        }
+        Expression::BinaryOp(op) => {
+            format_expression(&mut op.lhs_expr, depth);
+            format_expression(&mut op.rhs_expr, depth);
+        }
+        // Leaf expressions (Null, Bool, Number, String, Variable, etc.)
+        _ => {}
     }
 }
 
