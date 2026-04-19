@@ -1,0 +1,6 @@
+- id: tf-format
+  name: tf-format
+  description: Format Terraform/OpenTofu HCL files with tf-format.
+  entry: tf-format
+  language: rust
+  files: '\.(tf|tofu|tfvars)$'

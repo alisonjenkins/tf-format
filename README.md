@@ -115,6 +115,18 @@ Options:
     args: '--diff'      # override arguments (default: --check)
 ```
 
+### pre-commit / prek
+
+tf-format can be used as a [pre-commit](https://pre-commit.com) or [prek](https://prek.j178.dev/) hook:
+
+```yaml
+repos:
+- repo: https://github.com/alisonjenkins/tf-format
+  rev: v0.2.1  # pin to a release tag
+  hooks:
+  - id: tf-format
+```
+
 ### Supported file types
 
 `.tf`, `.tofu`, `.tfvars` — all discovered automatically when scanning directories.
