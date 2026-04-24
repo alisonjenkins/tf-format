@@ -94,3 +94,28 @@ fn fixture_func_call_object() {
 fn fixture_blank_line_groups() {
     run_fixture("blank_line_groups");
 }
+
+#[test]
+fn fixture_tfvars_singles_only() {
+    run_fixture("tfvars_singles_only");
+}
+
+#[test]
+fn fixture_tfvars_multiline_sorted() {
+    run_fixture("tfvars_multiline_sorted");
+}
+
+#[test]
+fn fixture_tfvars_blank_line_groups() {
+    run_fixture("tfvars_blank_line_groups");
+}
+
+#[test]
+fn fixture_tfvars_object_recursion() {
+    run_fixture("tfvars_object_recursion");
+}
+
+#[test]
+fn fixture_tfvars_with_top_level_comment() {
+    run_fixture("tfvars_with_top_level_comment");
+}

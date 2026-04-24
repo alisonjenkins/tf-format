@@ -189,89 +189,96 @@ pub fn format_body(body: &mut Body, depth: usize) {
     // Split into blank-line-separated groups, then process each group
     // independently through the 4-tier partition.
     let groups = split_body_groups(structures);
-    let num_groups = groups.len();
     let mut any_emitted = false;
 
     for (group_idx, group_structures) in groups.into_iter().enumerate() {
-        // 4-way partition: priority single/multi, then normal single/multi
-        let mut priority_single: Vec<Structure> = Vec::new();
-        let mut priority_multi: Vec<Structure> = Vec::new();
-        let mut normal_single: Vec<Structure> = Vec::new();
-        let mut normal_multi: Vec<Structure> = Vec::new();
-
-        for s in group_structures {
-            if priority_index(&s).is_some() {
-                if is_multiline(&s) {
-                    priority_multi.push(s);
-                } else {
-                    priority_single.push(s);
-                }
-            } else if is_multiline(&s) {
-                normal_multi.push(s);
-            } else {
-                normal_single.push(s);
-            }
-        }
-
-        // Priority items sort by their predefined order
-        priority_single.sort_by_key(|s| priority_index(s).unwrap_or(usize::MAX));
-        priority_multi.sort_by_key(|s| priority_index(s).unwrap_or(usize::MAX));
-
-        // Normal items sort alphabetically
-        normal_single.sort_by_key(sort_key);
-        normal_multi.sort_by_key(sort_key);
-
-        // Align `=` signs independently within each single-line partition
-        align_body_attributes(&mut priority_single);
-        align_body_attributes(&mut normal_single);
-
-        // Rebuild body: priority first, then normal, with appropriate spacing.
-        // Insert a blank line before the first item of a new group (except the
-        // very first group).
-        let has_priority = !priority_single.is_empty() || !priority_multi.is_empty();
-        let has_priority_single = !priority_single.is_empty();
-        let want_group_blank = any_emitted && group_idx > 0 && group_idx < num_groups;
-
-        // 1. Priority single-line attrs (no blank lines between)
-        for (i, mut s) in priority_single.into_iter().enumerate() {
-            let want_blank = if i == 0 { want_group_blank } else { false };
-            adjust_structure_prefix(&mut s, want_blank, &indent);
-            body.push(s);
-            any_emitted = true;
-        }
-
-        // 2. Priority multi-line blocks (blank line before each)
-        for (i, mut s) in priority_multi.into_iter().enumerate() {
-            let want_blank =
-                i > 0 || has_priority_single || (i == 0 && want_group_blank);
-            adjust_structure_prefix(&mut s, want_blank, &indent);
-            body.push(s);
-            any_emitted = true;
-        }
-
-        // 3. Normal single-line attrs (blank line before first if priority existed)
-        let has_normal_single = !normal_single.is_empty();
-        for (i, mut s) in normal_single.into_iter().enumerate() {
-            let want_blank = i == 0 && (has_priority || want_group_blank);
-            adjust_structure_prefix(&mut s, want_blank, &indent);
-            body.push(s);
-            any_emitted = true;
-        }
-
-        // 4. Normal multi-line attrs/blocks (blank line before each)
-        for (i, mut s) in normal_multi.into_iter().enumerate() {
-            let want_blank =
-                i > 0 || has_normal_single || has_priority || (i == 0 && want_group_blank);
-            adjust_structure_prefix(&mut s, want_blank, &indent);
-            body.push(s);
-            any_emitted = true;
-        }
+        let want_group_blank = any_emitted && group_idx > 0;
+        any_emitted =
+            format_structure_group(body, group_structures, &indent, want_group_blank, any_emitted);
     }
 
     // Restore body-level metadata
     *body.decor_mut() = body_decor;
     body.set_prefer_oneline(prefer_oneline);
     body.set_prefer_omit_trailing_newline(prefer_omit_trailing_newline);
+}
+
+/// Apply the 4-tier partition (priority single/multi, normal single/multi) to a
+/// group of structures, sort each tier, align `=` signs on the single-line
+/// tiers, and push the result onto `body`. `indent` is the indentation string
+/// for each structure; `want_group_blank` asks for a blank line before the
+/// first emitted structure; `any_emitted_before` is the running "anything
+/// already pushed?" flag. Returns the updated flag.
+fn format_structure_group(
+    body: &mut Body,
+    group: Vec<Structure>,
+    indent: &str,
+    want_group_blank: bool,
+    any_emitted_before: bool,
+) -> bool {
+    let mut priority_single: Vec<Structure> = Vec::new();
+    let mut priority_multi: Vec<Structure> = Vec::new();
+    let mut normal_single: Vec<Structure> = Vec::new();
+    let mut normal_multi: Vec<Structure> = Vec::new();
+
+    for s in group {
+        if priority_index(&s).is_some() {
+            if is_multiline(&s) {
+                priority_multi.push(s);
+            } else {
+                priority_single.push(s);
+            }
+        } else if is_multiline(&s) {
+            normal_multi.push(s);
+        } else {
+            normal_single.push(s);
+        }
+    }
+
+    priority_single.sort_by_key(|s| priority_index(s).unwrap_or(usize::MAX));
+    priority_multi.sort_by_key(|s| priority_index(s).unwrap_or(usize::MAX));
+    normal_single.sort_by_key(sort_key);
+    normal_multi.sort_by_key(sort_key);
+
+    align_body_attributes(&mut priority_single);
+    align_body_attributes(&mut normal_single);
+
+    let has_priority = !priority_single.is_empty() || !priority_multi.is_empty();
+    let has_priority_single = !priority_single.is_empty();
+
+    let mut any_emitted = any_emitted_before;
+
+    for (i, mut s) in priority_single.into_iter().enumerate() {
+        let want_blank = if i == 0 { want_group_blank } else { false };
+        adjust_structure_prefix(&mut s, want_blank, indent);
+        body.push(s);
+        any_emitted = true;
+    }
+
+    for (i, mut s) in priority_multi.into_iter().enumerate() {
+        let want_blank = i > 0 || has_priority_single || (i == 0 && want_group_blank);
+        adjust_structure_prefix(&mut s, want_blank, indent);
+        body.push(s);
+        any_emitted = true;
+    }
+
+    let has_normal_single = !normal_single.is_empty();
+
+    for (i, mut s) in normal_single.into_iter().enumerate() {
+        let want_blank = i == 0 && (has_priority || want_group_blank);
+        adjust_structure_prefix(&mut s, want_blank, indent);
+        body.push(s);
+        any_emitted = true;
+    }
+
+    for (i, mut s) in normal_multi.into_iter().enumerate() {
+        let want_blank = i > 0 || has_normal_single || has_priority || (i == 0 && want_group_blank);
+        adjust_structure_prefix(&mut s, want_blank, indent);
+        body.push(s);
+        any_emitted = true;
+    }
+
+    any_emitted
 }
 
 /// Split body structures into groups separated by blank lines. The Body
@@ -652,86 +659,114 @@ fn extract_key_comments(key: &ObjectKey) -> Vec<String> {
     extract_comments(&prefix)
 }
 
-/// Sort top-level blocks in a body. Groups consecutive blocks of the same type
-/// and sorts within each group for sortable block types (variable, resource,
-/// data, output).
+/// Top-level "run": either a contiguous span of attributes, or a contiguous
+/// span of blocks sharing the same `ident`.
+#[derive(PartialEq, Eq)]
+enum TopLevelRunKind {
+    Attr,
+    Block(String),
+}
+
+/// Format the top-level of a `Body`. Recurses into each structure first, then
+/// groups the structures into runs:
+///   - `Attr`: consecutive attribute assignments (as in a `.tfvars` file).
+///     Within a run, user-authored blank-line groups are preserved; each group
+///     sorts/aligns independently via `format_structure_group`.
+///   - `Block(ident)`: consecutive blocks of the same ident. Sortable idents
+///     (`variable` / `resource` / `data` / `output`) sort alphabetically by
+///     label; others keep their order. A blank line is emitted between each
+///     block in the run.
+///
+/// Runs are separated by a blank line.
 pub fn sort_top_level(body: &mut Body) {
     let body_decor = body.decor().clone();
     let prefer_oneline = body.prefer_oneline();
     let prefer_omit_trailing_newline = body.prefer_omit_trailing_newline();
 
     let old_body = std::mem::take(body);
-    let structures: Vec<Structure> = old_body.into_iter().collect();
+    let mut structures: Vec<Structure> = old_body.into_iter().collect();
 
-    // Group consecutive blocks of the same ident
-    let mut groups: Vec<Vec<Structure>> = Vec::new();
-    let mut current_group: Vec<Structure> = Vec::new();
-    let mut current_ident: Option<String> = None;
+    // Recurse into each structure first so nested bodies and object values are
+    // formatted before we reorder the top level.
+    for structure in &mut structures {
+        match structure {
+            Structure::Block(block) => {
+                format_body(&mut block.body, 0);
+            }
+            Structure::Attribute(attr) => {
+                format_expression(&mut attr.value, 0);
+            }
+        }
+    }
 
+    // Group into runs.
+    let mut runs: Vec<(TopLevelRunKind, Vec<Structure>)> = Vec::new();
     for s in structures {
-        let ident = match &s {
-            Structure::Block(b) => Some(b.ident.as_str().to_string()),
-            Structure::Attribute(_) => None,
+        let kind = match &s {
+            Structure::Attribute(_) => TopLevelRunKind::Attr,
+            Structure::Block(b) => TopLevelRunKind::Block(b.ident.as_str().to_string()),
         };
-
-        if ident == current_ident && ident.is_some() {
-            current_group.push(s);
-        } else {
-            if !current_group.is_empty() {
-                groups.push(std::mem::take(&mut current_group));
+        match runs.last_mut() {
+            Some((last_kind, group)) if *last_kind == kind => {
+                group.push(s);
             }
-            current_ident = ident;
-            current_group.push(s);
-        }
-    }
-    if !current_group.is_empty() {
-        groups.push(current_group);
-    }
-
-    // Sort within sortable groups
-    for group in &mut groups {
-        let should_sort = group.first().is_some_and(|s| {
-            matches!(
-                s,
-                Structure::Block(b) if matches!(b.ident.as_str(), "variable" | "resource" | "data" | "output")
-            )
-        });
-
-        if should_sort {
-            group.sort_by(|a, b| {
-                let a_key = label_sort_key(a);
-                let b_key = label_sort_key(b);
-                a_key.cmp(&b_key)
-            });
+            _ => {
+                runs.push((kind, vec![s]));
+            }
         }
     }
 
-    // Flatten back into body, adjusting top-level prefixes after sort
-    let mut is_first_structure = true;
-    for group in groups {
-        for mut s in group {
-            if is_first_structure {
-                // First structure in file: no leading whitespace
-                s.decor_mut().set_prefix("");
-                is_first_structure = false;
-            } else {
-                // Preserve comments but normalize spacing between top-level blocks
-                let existing = s
-                    .decor()
-                    .prefix()
-                    .map(|p| p.to_string())
-                    .unwrap_or_default();
-                let comments = extract_comments(&existing);
-                // Top-level blocks are separated by blank lines (the Body encoding
-                // adds \n after each structure, so one extra \n = one blank line)
-                let mut prefix = String::from("\n");
-                for comment in &comments {
-                    prefix.push_str(comment.trim());
-                    prefix.push('\n');
+    // Sort sortable block runs by label.
+    for (kind, group) in &mut runs {
+        if let TopLevelRunKind::Block(ident) = kind
+            && matches!(ident.as_str(), "variable" | "resource" | "data" | "output")
+        {
+            group.sort_by_key(label_sort_key);
+        }
+    }
+
+    // Flatten runs back into the body.
+    let mut any_emitted = false;
+    for (kind, group) in runs {
+        match kind {
+            TopLevelRunKind::Attr => {
+                // Preserve user-authored blank-line groups within the run, then
+                // format each group with zero indent via the shared helper.
+                for (sub_idx, sub_group) in split_body_groups(group).into_iter().enumerate() {
+                    let want_group_blank = (any_emitted && sub_idx == 0) || sub_idx > 0;
+                    any_emitted = format_structure_group(
+                        body,
+                        sub_group,
+                        "",
+                        want_group_blank,
+                        any_emitted,
+                    );
                 }
-                s.decor_mut().set_prefix(prefix);
             }
-            body.push(s);
+            TopLevelRunKind::Block(_) => {
+                for mut s in group {
+                    if !any_emitted {
+                        s.decor_mut().set_prefix("");
+                    } else {
+                        // Preserve comments, normalize spacing between top-level
+                        // blocks to one blank line.
+                        let existing = s
+                            .decor()
+                            .prefix()
+                            .map(|p| p.to_string())
+                            .unwrap_or_default();
+                        let comments = extract_comments(&existing);
+                        let mut prefix = String::from("\n");
+                        for comment in &comments {
+                            prefix.push_str(comment.trim());
+                            prefix.push('\n');
+                        }
+                        s.decor_mut().set_prefix(prefix);
+                    }
+                    body.push(s);
+                    any_emitted = true;
+                }
+            }
         }
     }
 

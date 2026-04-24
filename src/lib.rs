@@ -5,38 +5,16 @@ pub mod error;
 mod formatter;
 
 use error::FormatError;
-use hcl_edit::Decorate;
-use hcl_edit::structure::{Body, Structure};
+use hcl_edit::structure::Body;
 
 /// Format an HCL string by sorting attributes and blocks according to the
 /// tf-format rules.
 pub fn format_hcl(input: &str) -> Result<String, FormatError> {
     let mut body: Body = input.parse()?;
 
-    // Sort top-level blocks (variable, resource, data, output by name)
+    // sort_top_level handles both block ordering and top-level attribute
+    // formatting (as in `.tfvars` files), recursing into nested bodies.
     formatter::sort_top_level(&mut body);
-
-    // Format each top-level block's contents by draining, processing, rebuilding
-    let body_decor = body.decor().clone();
-    let prefer_oneline = body.prefer_oneline();
-    let prefer_omit_trailing_newline = body.prefer_omit_trailing_newline();
-
-    let old_body = std::mem::take(&mut body);
-    let mut structures: Vec<Structure> = old_body.into_iter().collect();
-
-    for structure in &mut structures {
-        if let Structure::Block(block) = structure {
-            formatter::format_body(&mut block.body, 0);
-        }
-    }
-
-    for s in structures {
-        body.push(s);
-    }
-
-    *body.decor_mut() = body_decor;
-    body.set_prefer_oneline(prefer_oneline);
-    body.set_prefer_omit_trailing_newline(prefer_omit_trailing_newline);
 
     Ok(post_process(&body.to_string()))
 }
