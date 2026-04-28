@@ -206,10 +206,32 @@ instance_type = "t2.micro"
 - Trailing whitespace stripped from all lines
 - File always ends with exactly one newline
 
+## Styles
+
+tf-format ships two styles:
+
+- `opinionated` (default) — every transform documented in
+  "Formatting Rules" above: alphabetisation, hoisting, alignment,
+  expansion. Ideal for greenfield repos and teams who want one
+  canonical style.
+- `minimal` — alignment + spacing only, mirroring
+  `terraform fmt` / `tofu fmt`. No reordering, no hoisting, no
+  trailing-comma insertion, no single-line-object expansion. Use
+  this when you want the spacing benefits of an in-process
+  formatter (e.g. inside a language server) without imposing
+  tf-format's opinions on a codebase that hasn't adopted them.
+
+CLI:
+
+```sh
+tf-format --style opinionated path/to/dir   # default
+tf-format --style minimal     path/to/dir   # terraform fmt parity
+```
+
 ## Library usage
 
 ```rust
-use tf_format::format_hcl;
+use tf_format::{FormatOptions, format_hcl, format_hcl_with};
 
 let input = r#"
 resource "aws_instance" "web" {
@@ -218,7 +240,11 @@ resource "aws_instance" "web" {
 }
 "#;
 
+// Default opinionated style:
 let formatted = format_hcl(input).expect("valid HCL");
+
+// Minimal (terraform fmt) style:
+let minimal = format_hcl_with(input, &FormatOptions::minimal()).expect("valid HCL");
 ```
 
 ## Design
@@ -226,4 +252,4 @@ let formatted = format_hcl(input).expect("valid HCL");
 - **Fast** — tf-format is a single native binary with no runtime dependencies. It parses HCL into an AST via [hcl-edit](https://crates.io/crates/hcl-edit) and manipulates it in-memory rather than doing string processing, so formatting even large Terraform codebases completes in milliseconds. There is no JVM startup, no interpreter overhead, and no shelling out to `terraform fmt` — just parse, sort, emit.
 - **Reliable** — every formatting rule is covered by fixture tests that verify both correctness and idempotency (formatting twice always produces identical output). The formatter never modifies semantics: list order is preserved, comments travel with their attributes, and inline expressions are left untouched. Typed error handling with full context means failures report exactly what went wrong and where.
 - **Deterministic** — same input always produces same output, regardless of the original formatting
-- **No configuration** — one style, consistently applied
+- **Two styles, opt-in** — `opinionated` (full rule set) or `minimal` (alignment-only). Each is a single fixed style with no further knobs.

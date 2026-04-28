@@ -4,11 +4,33 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 
 use tf_format::error::{CliError, DiscoverFilesError, ProcessFileError};
+use tf_format::{FormatOptions, FormatStyle};
 
 const TF_EXTENSIONS: &[&str] = &["tf", "tofu", "tfvars"];
+
+/// Style selector exposed on the CLI. Maps 1:1 to
+/// [`tf_format::FormatStyle`]; declared separately so the CLI's
+/// derive macro doesn't reach into the library type.
+#[derive(Debug, Clone, Copy, ValueEnum, Default)]
+enum StyleArg {
+    /// tf-format's default — alphabetisation, hoisting, expansion.
+    #[default]
+    Opinionated,
+    /// `terraform fmt` / `tofu fmt` parity — alignment + spacing only.
+    Minimal,
+}
+
+impl From<StyleArg> for FormatStyle {
+    fn from(value: StyleArg) -> Self {
+        match value {
+            StyleArg::Opinionated => FormatStyle::Opinionated,
+            StyleArg::Minimal => FormatStyle::Minimal,
+        }
+    }
+}
 
 #[derive(Parser)]
 #[command(
@@ -30,6 +52,12 @@ struct Cli {
     /// Print unified diff instead of writing files
     #[arg(long)]
     diff: bool,
+
+    /// Formatting style. `opinionated` is tf-format's default
+    /// behaviour; `minimal` mirrors `terraform fmt` / `tofu fmt`
+    /// (alignment + spacing only, no reordering).
+    #[arg(long, value_enum, default_value_t = StyleArg::Opinionated)]
+    style: StyleArg,
 }
 
 fn main() -> ExitCode {
@@ -45,13 +73,17 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: &Cli) -> Result<(), CliError> {
+    let opts = FormatOptions {
+        style: cli.style.into(),
+    };
+
     if cli.stdin {
         let mut input = String::new();
         io::stdin()
             .read_to_string(&mut input)
             .map_err(CliError::ReadStdin)?;
 
-        let output = tf_format::format_hcl(&input)?;
+        let output = tf_format::format_hcl_with(&input, &opts)?;
 
         io::stdout()
             .write_all(output.as_bytes())
@@ -70,7 +102,7 @@ fn run(cli: &Cli) -> Result<(), CliError> {
     let mut needs_formatting = Vec::new();
 
     for path in &paths {
-        let changed = process_file(path, cli.check, cli.diff)?;
+        let changed = process_file(path, cli.check, cli.diff, &opts)?;
         if changed {
             needs_formatting.push(path.clone());
         }
@@ -88,16 +120,22 @@ fn run(cli: &Cli) -> Result<(), CliError> {
     Ok(())
 }
 
-fn process_file(path: &Path, check: bool, diff: bool) -> Result<bool, ProcessFileError> {
+fn process_file(
+    path: &Path,
+    check: bool,
+    diff: bool,
+    opts: &FormatOptions,
+) -> Result<bool, ProcessFileError> {
     let input = std::fs::read_to_string(path).map_err(|source| ProcessFileError::ReadFile {
         path: path.to_path_buf(),
         source,
     })?;
 
-    let output = tf_format::format_hcl(&input).map_err(|source| ProcessFileError::Format {
-        path: path.to_path_buf(),
-        source,
-    })?;
+    let output =
+        tf_format::format_hcl_with(&input, opts).map_err(|source| ProcessFileError::Format {
+            path: path.to_path_buf(),
+            source,
+        })?;
 
     if input == output {
         return Ok(false);

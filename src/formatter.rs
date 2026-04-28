@@ -4,6 +4,35 @@ use hcl_edit::structure::{Body, Structure};
 
 use crate::classify::is_multiline;
 
+/// Selects between tf-format's full opinionated style and a
+/// minimal `terraform fmt` / `tofu fmt`-parity mode.
+///
+/// The opinionated style sorts top-level blocks alphabetically,
+/// hoists meta-arguments to the top of every block, alphabetises
+/// attributes and object keys, expands wide single-line objects,
+/// and adds trailing commas to multi-line arrays. The minimal
+/// style turns all of those off and applies only spacing /
+/// alignment changes — `=` alignment, 2-space indent, single
+/// trailing newline, and whitespace cleanup.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FormatStyle {
+    /// Apply every transform tf-format knows about. Default.
+    #[default]
+    Opinionated,
+    /// Apply only spacing + alignment transforms; preserve source
+    /// order. Mirrors `terraform fmt` / `tofu fmt`.
+    Minimal,
+}
+
+impl FormatStyle {
+    /// True when the style permits structural rewrites like
+    /// reordering, alphabetisation, hoisting, single-line→multi
+    /// expansion, and trailing-comma insertion.
+    fn is_opinionated(self) -> bool {
+        matches!(self, FormatStyle::Opinionated)
+    }
+}
+
 /// Attributes that are meta-arguments or module-specific and should appear at
 /// the top of a block, in this fixed order.
 const PRIORITY_ATTRS: &[&str] = &[
@@ -162,7 +191,10 @@ fn adjust_structure_prefix(structure: &mut Structure, want_blank_line: bool, ind
 /// 3. Recurse into nested blocks and object expressions.
 /// 4. Blank-line-separated groups in the original source are preserved and
 ///    each group is sorted/aligned independently.
-pub fn format_body(body: &mut Body, depth: usize) {
+///
+/// Under [`FormatStyle::Minimal`] the partitioning + sorting is
+/// suppressed; only `=` alignment within blank-line groups runs.
+pub fn format_body(body: &mut Body, depth: usize, style: FormatStyle) {
     let indent = "  ".repeat(depth + 1);
 
     // Preserve body-level metadata
@@ -178,10 +210,10 @@ pub fn format_body(body: &mut Body, depth: usize) {
     for structure in &mut structures {
         match structure {
             Structure::Block(block) => {
-                format_body(&mut block.body, depth + 1);
+                format_body(&mut block.body, depth + 1, style);
             }
             Structure::Attribute(attr) => {
-                format_expression(&mut attr.value, depth + 1);
+                format_expression(&mut attr.value, depth + 1, style);
             }
         }
     }
@@ -193,8 +225,14 @@ pub fn format_body(body: &mut Body, depth: usize) {
 
     for (group_idx, group_structures) in groups.into_iter().enumerate() {
         let want_group_blank = any_emitted && group_idx > 0;
-        any_emitted =
-            format_structure_group(body, group_structures, &indent, want_group_blank, any_emitted);
+        any_emitted = format_structure_group(
+            body,
+            group_structures,
+            &indent,
+            want_group_blank,
+            any_emitted,
+            style,
+        );
     }
 
     // Restore body-level metadata
@@ -215,7 +253,18 @@ fn format_structure_group(
     indent: &str,
     want_group_blank: bool,
     any_emitted_before: bool,
+    style: FormatStyle,
 ) -> bool {
+    if !style.is_opinionated() {
+        return format_structure_group_minimal(
+            body,
+            group,
+            indent,
+            want_group_blank,
+            any_emitted_before,
+        );
+    }
+
     let mut priority_single: Vec<Structure> = Vec::new();
     let mut priority_multi: Vec<Structure> = Vec::new();
     let mut normal_single: Vec<Structure> = Vec::new();
@@ -281,6 +330,70 @@ fn format_structure_group(
     any_emitted
 }
 
+/// `terraform fmt` / `tofu fmt` parity path: keep source order
+/// intact, run only `=` alignment over the consecutive runs of
+/// single-line attributes, and re-emit. No partitioning, no
+/// hoisting, no alphabetisation.
+fn format_structure_group_minimal(
+    body: &mut Body,
+    mut group: Vec<Structure>,
+    indent: &str,
+    want_group_blank: bool,
+    any_emitted_before: bool,
+) -> bool {
+    align_body_attributes_in_place(&mut group);
+
+    let mut any_emitted = any_emitted_before;
+    for (i, mut s) in group.into_iter().enumerate() {
+        let want_blank = i == 0 && want_group_blank;
+        adjust_structure_prefix(&mut s, want_blank, indent);
+        body.push(s);
+        any_emitted = true;
+    }
+    any_emitted
+}
+
+/// Align `=` signs across each contiguous run of single-line
+/// attributes inside `structures`, preserving overall order.
+/// Multi-line attributes and blocks split a run; comments do too
+/// (matching `terraform fmt`).
+fn align_body_attributes_in_place(structures: &mut [Structure]) {
+    let mut i = 0;
+    while i < structures.len() {
+        // Advance past anything that isn't a single-line attribute.
+        while i < structures.len() && !is_single_line_attribute(&structures[i]) {
+            i += 1;
+        }
+        let run_start = i;
+        while i < structures.len()
+            && is_single_line_attribute(&structures[i])
+            && (i == run_start
+                || extract_comments(
+                    &structures[i]
+                        .decor()
+                        .prefix()
+                        .map(|p| p.to_string())
+                        .unwrap_or_default(),
+                )
+                .is_empty())
+        {
+            i += 1;
+        }
+        if i > run_start {
+            align_body_attribute_group(&mut structures[run_start..i]);
+        } else {
+            // No progress — shouldn't happen because the outer
+            // loop advances on non-attributes, but break to be
+            // defensive against pathological inputs.
+            break;
+        }
+    }
+}
+
+fn is_single_line_attribute(s: &Structure) -> bool {
+    matches!(s, Structure::Attribute(_)) && !is_multiline(s)
+}
+
 /// Split body structures into groups separated by blank lines. The Body
 /// encoding adds `\n` between structures (like a Newline terminator), so a
 /// blank line shows up as a leading `\n` in the structure's prefix.
@@ -310,23 +423,29 @@ fn split_body_groups(structures: Vec<Structure>) -> Vec<Vec<Structure>> {
 /// Recursively format an expression in-place. Sorts object keys and recurses
 /// into nested objects, arrays, function call arguments, and other compound
 /// expressions.
-fn format_expression(expr: &mut Expression, depth: usize) {
+///
+/// Under [`FormatStyle::Minimal`] the object-key sort and the
+/// single-line-object expansion are skipped, and trailing-comma
+/// insertion on multi-line arrays is suppressed.
+fn format_expression(expr: &mut Expression, depth: usize, style: FormatStyle) {
     match expr {
         Expression::Object(obj) => {
             // Format multi-line objects, and also expand any single-line object
             // whose rendered width exceeds the line-length budget so we don't
-            // emit huge unreadable one-liners.
-            if is_multiline_object(obj) || should_expand_single_line_object(obj, depth) {
-                format_object(obj, depth);
+            // emit huge unreadable one-liners. The expansion is opinionated
+            // — it changes the source layout — so we skip it under
+            // FormatStyle::Minimal.
+            let should_expand =
+                style.is_opinionated() && should_expand_single_line_object(obj, depth);
+            if is_multiline_object(obj) || should_expand {
+                format_object(obj, depth, style);
             }
         }
         Expression::Array(arr) => {
-            // Multi-line arrays should always have a trailing comma so that
-            // adding a new entry only changes one line in the diff.
-            if is_multiline_array(arr) && !arr.is_empty() {
-                // When the input has no trailing comma, the parser stores the
-                // whitespace before `]` in the last element's suffix. Move it
-                // to the array's trailing so the comma lands on the right line.
+            // Trailing-comma insertion is opinionated — `terraform fmt`
+            // preserves the user's original layout — so it only fires
+            // under FormatStyle::Opinionated.
+            if style.is_opinionated() && is_multiline_array(arr) && !arr.is_empty() {
                 let last_idx = arr.len() - 1;
                 if let Some(last) = arr.get_mut(last_idx) {
                     let suffix = last
@@ -343,50 +462,44 @@ fn format_expression(expr: &mut Expression, depth: usize) {
             }
             for i in 0..arr.len() {
                 if let Some(elem) = arr.get_mut(i) {
-                    // If the element shares a line with the array's `[` (no
-                    // newline in its prefix), the inline form `[{ ... }]` makes
-                    // the object behave as if it were a direct attribute value
-                    // at the array's own depth. Otherwise the canonical multi-
-                    // line form puts each element one level deeper than the
-                    // array.
                     let elem_inline = elem
                         .decor()
                         .prefix()
                         .is_none_or(|p| !p.to_string().contains('\n'));
                     let elem_depth = if elem_inline { depth } else { depth + 1 };
-                    format_expression(elem, elem_depth);
+                    format_expression(elem, elem_depth, style);
                 }
             }
         }
         Expression::FuncCall(call) => {
             for arg in call.args.iter_mut() {
-                format_expression(arg, depth);
+                format_expression(arg, depth, style);
             }
         }
         Expression::Parenthesis(paren) => {
-            format_expression(paren.inner_mut(), depth);
+            format_expression(paren.inner_mut(), depth, style);
         }
         Expression::Conditional(cond) => {
-            format_expression(&mut cond.cond_expr, depth);
-            format_expression(&mut cond.true_expr, depth);
-            format_expression(&mut cond.false_expr, depth);
+            format_expression(&mut cond.cond_expr, depth, style);
+            format_expression(&mut cond.true_expr, depth, style);
+            format_expression(&mut cond.false_expr, depth, style);
         }
         Expression::Traversal(trav) => {
-            format_expression(&mut trav.expr, depth);
+            format_expression(&mut trav.expr, depth, style);
         }
         Expression::ForExpr(for_expr) => {
-            format_expression(&mut for_expr.intro.collection_expr, depth);
+            format_expression(&mut for_expr.intro.collection_expr, depth, style);
             if let Some(key_expr) = &mut for_expr.key_expr {
-                format_expression(key_expr, depth);
+                format_expression(key_expr, depth, style);
             }
-            format_expression(&mut for_expr.value_expr, depth);
+            format_expression(&mut for_expr.value_expr, depth, style);
         }
         Expression::UnaryOp(op) => {
-            format_expression(&mut op.expr, depth);
+            format_expression(&mut op.expr, depth, style);
         }
         Expression::BinaryOp(op) => {
-            format_expression(&mut op.lhs_expr, depth);
-            format_expression(&mut op.rhs_expr, depth);
+            format_expression(&mut op.lhs_expr, depth, style);
+            format_expression(&mut op.rhs_expr, depth, style);
         }
         // Leaf expressions (Null, Bool, Number, String, Variable, etc.)
         _ => {}
@@ -517,10 +630,16 @@ fn is_multiline_object(obj: &Object) -> bool {
     })
 }
 
-/// Sort the keys of an HCL object in-place, applying the same single-line-first
-/// then multi-line rules. Blank-line-separated groups are preserved and each
-/// group is sorted/aligned independently, matching `terraform fmt` / `tofu fmt`.
-fn format_object(obj: &mut Object, depth: usize) {
+/// Format an HCL object in-place. Under
+/// [`FormatStyle::Opinionated`], applies the single-line-first /
+/// multi-line-second tiering with alphabetical sort within each
+/// tier (matching the body-level rule). Under
+/// [`FormatStyle::Minimal`], preserves source order and only
+/// aligns `=` signs.
+///
+/// Blank-line-separated groups in the original source are
+/// preserved and each group is sorted/aligned independently.
+fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
     let indent = "  ".repeat(depth + 1);
 
     // Preserve object-level decor
@@ -532,7 +651,7 @@ fn format_object(obj: &mut Object, depth: usize) {
 
     // Recurse into nested values
     for (_, value) in &mut entries {
-        format_expression(value.expr_mut(), depth + 1);
+        format_expression(value.expr_mut(), depth + 1, style);
     }
 
     // Split entries into blank-line-separated groups. Each group will be
@@ -548,22 +667,33 @@ fn format_object(obj: &mut Object, depth: usize) {
         let need_group_blank = !is_first && group_idx > 0;
         let mut group_blank_emitted = false;
 
-        // Partition into single-line and multi-line
-        let (mut single, mut multi): (Vec<_>, Vec<_>) = group_entries
-            .into_iter()
-            .partition(|(_, v)| !v.expr().to_string().contains('\n'));
+        // Partition into single-line and multi-line; under Minimal we
+        // skip the partition entirely so the source order survives.
+        let (mut single, mut multi): (Vec<_>, Vec<_>) = if style.is_opinionated() {
+            group_entries
+                .into_iter()
+                .partition(|(_, v)| !v.expr().to_string().contains('\n'))
+        } else {
+            (group_entries, Vec::new())
+        };
 
-        // Sort each partition
-        single.sort_by(|(a, _), (b, _)| object_key_str(a).cmp(&object_key_str(b)));
-        multi.sort_by(|(a, _), (b, _)| object_key_str(a).cmp(&object_key_str(b)));
+        if style.is_opinionated() {
+            single.sort_by(|(a, _), (b, _)| object_key_str(a).cmp(&object_key_str(b)));
+            multi.sort_by(|(a, _), (b, _)| object_key_str(a).cmp(&object_key_str(b)));
+        }
 
-        // Align `=` signs only within the single-line partition. `tofu fmt`
-        // does not align `=` for multi-line values; each multi-line entry
-        // just gets a single space on either side of `=`.
-        align_object_keys(&mut single);
-        for (key, value) in multi.iter_mut() {
-            key.decor_mut().set_suffix(" ");
-            value.expr_mut().decor_mut().set_prefix(" ");
+        // Align `=` signs only within consecutive runs of single-line
+        // entries. Under Opinionated everything in `single` qualifies;
+        // under Minimal we have to walk `single` (which holds the
+        // original order, mixed single + multi) and align run-by-run.
+        if style.is_opinionated() {
+            align_object_keys(&mut single);
+            for (key, value) in multi.iter_mut() {
+                key.decor_mut().set_suffix(" ");
+                value.expr_mut().decor_mut().set_prefix(" ");
+            }
+        } else {
+            align_object_entries_in_place(&mut single);
         }
 
         let has_single = !single.is_empty();
@@ -610,6 +740,34 @@ fn format_object(obj: &mut Object, depth: usize) {
         _ => format!("\n{closing_indent}"),
     };
     obj.set_trailing(trailing);
+}
+
+/// Align `=` across each contiguous run of single-line object
+/// entries inside `entries`, leaving multi-line entries with a
+/// plain single-space `=` on either side. Used in Minimal mode
+/// where the entries vector still holds the original mixed order.
+fn align_object_entries_in_place(entries: &mut [(ObjectKey, hcl_edit::expr::ObjectValue)]) {
+    let mut i = 0;
+    while i < entries.len() {
+        // Skip multi-line entries — give them the canonical single
+        // space on either side of `=` and advance.
+        while i < entries.len() && entries[i].1.expr().to_string().contains('\n') {
+            entries[i].0.decor_mut().set_suffix(" ");
+            entries[i].1.expr_mut().decor_mut().set_prefix(" ");
+            i += 1;
+        }
+        let run_start = i;
+        while i < entries.len() && !entries[i].1.expr().to_string().contains('\n') {
+            // Comments attached to a key break the alignment run.
+            if i > run_start && !extract_key_comments(&entries[i].0).is_empty() {
+                break;
+            }
+            i += 1;
+        }
+        if i > run_start {
+            align_object_key_group(&mut entries[run_start..i]);
+        }
+    }
 }
 
 /// Split object entries into groups separated by blank lines. Uses the
@@ -678,7 +836,7 @@ enum TopLevelRunKind {
 ///     block in the run.
 ///
 /// Runs are separated by a blank line.
-pub fn sort_top_level(body: &mut Body) {
+pub fn sort_top_level(body: &mut Body, style: FormatStyle) {
     let body_decor = body.decor().clone();
     let prefer_oneline = body.prefer_oneline();
     let prefer_omit_trailing_newline = body.prefer_omit_trailing_newline();
@@ -691,10 +849,10 @@ pub fn sort_top_level(body: &mut Body) {
     for structure in &mut structures {
         match structure {
             Structure::Block(block) => {
-                format_body(&mut block.body, 0);
+                format_body(&mut block.body, 0, style);
             }
             Structure::Attribute(attr) => {
-                format_expression(&mut attr.value, 0);
+                format_expression(&mut attr.value, 0, style);
             }
         }
     }
@@ -716,12 +874,15 @@ pub fn sort_top_level(body: &mut Body) {
         }
     }
 
-    // Sort sortable block runs by label.
-    for (kind, group) in &mut runs {
-        if let TopLevelRunKind::Block(ident) = kind
-            && matches!(ident.as_str(), "variable" | "resource" | "data" | "output")
-        {
-            group.sort_by_key(label_sort_key);
+    // Sort sortable block runs by label — only under the
+    // opinionated style. Minimal mode preserves source order.
+    if style.is_opinionated() {
+        for (kind, group) in &mut runs {
+            if let TopLevelRunKind::Block(ident) = kind
+                && matches!(ident.as_str(), "variable" | "resource" | "data" | "output")
+            {
+                group.sort_by_key(label_sort_key);
+            }
         }
     }
 
@@ -740,6 +901,7 @@ pub fn sort_top_level(body: &mut Body) {
                         "",
                         want_group_blank,
                         any_emitted,
+                        style,
                     );
                 }
             }
