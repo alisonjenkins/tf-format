@@ -751,8 +751,7 @@ fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
             group_blank_emitted = true;
         }
         for (i, (mut key, value)) in multi.into_iter().enumerate() {
-            let want_blank = (i > 0 || has_single)
-                || (need_group_blank && !group_blank_emitted);
+            let want_blank = (i > 0 || has_single) || (need_group_blank && !group_blank_emitted);
             let comments = extract_key_comments(&key);
             let prefix = build_object_key_prefix(is_first, want_blank, &comments, &indent);
             key.decor_mut().set_prefix(prefix);
@@ -840,7 +839,6 @@ fn split_object_groups(
     }
     groups
 }
-
 
 /// Extract comment lines from an object key's prefix decor.
 fn extract_key_comments(key: &ObjectKey) -> Vec<String> {
