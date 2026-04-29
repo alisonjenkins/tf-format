@@ -99,6 +99,14 @@ fn fixture_wide_object_not_expanded() {
 }
 
 #[test]
+fn fixture_funccall_multiline_object_arg() {
+    // Same bug surface as the opinionated regression — affects
+    // both styles since the recursion happens in the shared
+    // format_expression function.
+    run_minimal_fixture("funccall_multiline_object_arg");
+}
+
+#[test]
 fn fixture_for_expr_value_indent() {
     // Regression mirror of the opinionated-mode test: object
     // for-expression value position must indent inner keys

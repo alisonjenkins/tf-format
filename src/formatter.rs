@@ -480,8 +480,21 @@ fn format_expression(expr: &mut Expression, depth: usize, style: FormatStyle) {
             }
         }
         Expression::FuncCall(call) => {
+            // Multi-line FuncCalls put each arg on its own line
+            // one level deeper than the call itself; single-line
+            // calls keep all args on the call's line at the same
+            // depth. Detect per-arg via the prefix-newline trick
+            // already used by Array elements above so that
+            // recursing into a multi-line Object / Array arg
+            // hands `format_object` / inner indent calculations
+            // the right depth.
             for arg in call.args.iter_mut() {
-                format_expression(arg, depth, style);
+                let arg_inline = arg
+                    .decor()
+                    .prefix()
+                    .is_none_or(|p| !p.to_string().contains('\n'));
+                let arg_depth = if arg_inline { depth } else { depth + 1 };
+                format_expression(arg, arg_depth, style);
             }
         }
         Expression::Parenthesis(paren) => {

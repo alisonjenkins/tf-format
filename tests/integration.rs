@@ -121,6 +121,15 @@ fn fixture_tfvars_with_top_level_comment() {
 }
 
 #[test]
+fn fixture_funccall_multiline_object_arg() {
+    // Regression: a multi-line FuncCall whose arg is a multi-
+    // line object literal must indent the object's keys at
+    // call_depth + 2 (one inside the call's `(`, one inside
+    // the object's `{`). The bug had keys at call_depth + 1.
+    run_fixture("funccall_multiline_object_arg");
+}
+
+#[test]
 fn fixture_for_expr_value_indent() {
     // Regression: the value position of an object for-expression
     // (`{ for x in C : K => { ... } }`) must indent its inner
