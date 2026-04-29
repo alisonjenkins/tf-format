@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/alisonjenkins/tf-format/compare/v0.3.0...v0.4.0) (2026-04-29)
+
+
+### Features
+
+* add pre-commit hook support ([ff574fa](https://github.com/alisonjenkins/tf-format/commit/ff574fa1ce17357a57ce2042c1ec9595c186ee5b))
+
 ## [0.3.0](https://github.com/alisonjenkins/tf-format/compare/v0.2.1...v0.3.0) (2026-04-29)
 
 
