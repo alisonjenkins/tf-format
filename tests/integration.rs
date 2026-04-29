@@ -121,6 +121,14 @@ fn fixture_tfvars_with_top_level_comment() {
 }
 
 #[test]
+fn fixture_colon_assignment_rewrite() {
+    // Issue #18: opinionated mode should rewrite `:` object
+    // separators to `=` (canonical form) and then column-align
+    // uniformly. Reporter's exact repro pinned here.
+    run_fixture("colon_assignment_rewrite");
+}
+
+#[test]
 fn fixture_funccall_multiline_object_arg() {
     // Regression: a multi-line FuncCall whose arg is a multi-
     // line object literal must indent the object's keys at

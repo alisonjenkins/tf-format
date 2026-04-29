@@ -1,5 +1,5 @@
 use hcl_edit::Decorate;
-use hcl_edit::expr::{Expression, Object, ObjectKey, ObjectValueTerminator};
+use hcl_edit::expr::{Expression, Object, ObjectKey, ObjectValueAssignment, ObjectValueTerminator};
 use hcl_edit::structure::{Body, Structure};
 
 use crate::classify::is_multiline;
@@ -601,6 +601,41 @@ fn align_object_keys(entries: &mut [(ObjectKey, hcl_edit::expr::ObjectValue)]) {
 }
 
 fn align_object_key_group(entries: &mut [(ObjectKey, hcl_edit::expr::ObjectValue)]) {
+    // tofu fmt aligns `=` runs but never `:` runs, and treats a
+    // `:` entry as a hard break for `=` alignment. Two `=` runs
+    // separated by a `:` align INDEPENDENTLY of each other.
+    //
+    // Walk the slice in consecutive-same-assignment runs. Equals
+    // runs get column-aligned (longest key sets the column for
+    // its own run). Colon runs get single-space padding —
+    // matching `tofu fmt`'s render of the JSON-like object form.
+    let mut start = 0;
+    while start < entries.len() {
+        let kind = entries[start].1.assignment();
+        let mut end = start + 1;
+        while end < entries.len() && entries[end].1.assignment() == kind {
+            end += 1;
+        }
+        match kind {
+            ObjectValueAssignment::Equals => {
+                align_equals_run(&mut entries[start..end]);
+            }
+            ObjectValueAssignment::Colon => {
+                for (key, value) in entries[start..end].iter_mut() {
+                    key.decor_mut().set_suffix(" ");
+                    value.expr_mut().decor_mut().set_prefix(" ");
+                }
+            }
+        }
+        start = end;
+    }
+}
+
+/// Column-align a contiguous run of single-line `=` assignments
+/// — pad each key's suffix to bring every `=` to the same
+/// column, normalise the value's prefix to a single space.
+/// Matches `terraform fmt` / `tofu fmt` exactly.
+fn align_equals_run(entries: &mut [(ObjectKey, hcl_edit::expr::ObjectValue)]) {
     let max_key_len = entries
         .iter()
         .map(|(k, _)| object_key_str(k).len())
@@ -610,8 +645,6 @@ fn align_object_key_group(entries: &mut [(ObjectKey, hcl_edit::expr::ObjectValue
     for (key, value) in entries.iter_mut() {
         let padding = max_key_len - object_key_str(key).len() + 1;
         key.decor_mut().set_suffix(" ".repeat(padding));
-        // Normalize whitespace after `=` to a single space, matching
-        // `terraform fmt` / `tofu fmt`.
         value.expr_mut().decor_mut().set_prefix(" ");
     }
 }
@@ -681,6 +714,19 @@ fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
     // Recurse into nested values
     for (_, value) in &mut entries {
         format_expression(value.expr_mut(), depth + 1, style);
+    }
+
+    // Opinionated style: rewrite every `:` separator to `=`
+    // BEFORE alignment, so the whole object renders in the
+    // canonical equals-form and lands in a single uniformly-
+    // aligned column. Minimal style preserves the user's
+    // separator choice (matching `tofu fmt` exactly).
+    if style.is_opinionated() {
+        for (_, value) in &mut entries {
+            if matches!(value.assignment(), ObjectValueAssignment::Colon) {
+                value.set_assignment(ObjectValueAssignment::Equals);
+            }
+        }
     }
 
     // Split entries into blank-line-separated groups under

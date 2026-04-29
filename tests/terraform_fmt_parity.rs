@@ -83,6 +83,37 @@ fn check_parity(name: &str, input: &str) {
     pretty_assertions::assert_eq!(twice, ours, "{name}: tf-format is not idempotent");
 }
 
+/// Minimal-mode variant of `check_parity` for inputs whose
+/// expected tofu output relies on tf-format NOT applying its
+/// opinionated transforms (e.g. inputs that contain `:` object
+/// separators, which the opinionated path rewrites to `=`).
+fn check_parity_minimal(name: &str, input: &str) {
+    if !tofu_available() {
+        eprintln!("SKIP {name}: tofu not on PATH");
+        return;
+    }
+
+    let opts = tf_format::FormatOptions::minimal();
+    let ours = match tf_format::format_hcl_with(input, &opts) {
+        Ok(s) => s,
+        Err(e) => panic!("{name}: format_hcl_with failed: {e}"),
+    };
+    let theirs = match tofu_fmt(input) {
+        Ok(s) => s,
+        Err(e) => panic!("{name}: tofu fmt failed: {e}"),
+    };
+    pretty_assertions::assert_eq!(
+        ours,
+        theirs,
+        "{name}: tf-format minimal output differs from `tofu fmt`"
+    );
+    let twice = match tf_format::format_hcl_with(&ours, &opts) {
+        Ok(s) => s,
+        Err(e) => panic!("{name}: second format_hcl_with failed: {e}"),
+    };
+    pretty_assertions::assert_eq!(twice, ours, "{name}: tf-format minimal is not idempotent");
+}
+
 #[test]
 fn parity_body_varying_key_lengths() {
     let input = r#"resource "aws_instance" "example" {
@@ -320,4 +351,38 @@ fn parity_multiline_value_between_singles() {
 }
 "#;
     check_parity("multiline_value_between_singles", input);
+}
+
+#[test]
+fn parity_object_colon_separator() {
+    // Issue #18 regression: `tofu fmt` does NOT column-align
+    // object entries that use `:` as the assignment operator.
+    // tf-format minimal must match exactly.
+    let input = r#"locals {
+  m = {
+    "attribute.inline_very_long" : "assertion.inline_very_long_name"
+    (local.names["short"]) : "assertion.short"
+    (local.names["very_long"]) : "assertion.very_long"
+  }
+}
+"#;
+    check_parity_minimal("object_colon_separator", input);
+}
+
+#[test]
+fn parity_object_mixed_colon_and_equals() {
+    // Issue #18 follow-up: `:` is a hard break for `=`
+    // alignment runs. Two `=` runs separated by a `:` align
+    // INDEPENDENTLY. tf-format minimal must mirror tofu fmt.
+    let input = r#"locals {
+  m = {
+    "a" = "1"
+    "long_key" = "2"
+    "x" : "3"
+    "another_eq" = "4"
+    "z" = "5"
+  }
+}
+"#;
+    check_parity_minimal("object_mixed_colon_and_equals", input);
 }

@@ -99,6 +99,22 @@ fn fixture_wide_object_not_expanded() {
 }
 
 #[test]
+fn fixture_colon_assignment_preserved() {
+    // Issue #18: minimal mode should NOT align `:` entries —
+    // each gets a single space before/after the separator,
+    // matching `tofu fmt` exactly. Reporter's repro pinned.
+    run_minimal_fixture("colon_assignment_preserved");
+}
+
+#[test]
+fn fixture_colon_mixed_with_equals() {
+    // Issue #18: when `:` and `=` interleave, each consecutive
+    // `=` run aligns INDEPENDENTLY (a `:` entry is a hard
+    // break for `=` alignment). Pinned against tofu fmt.
+    run_minimal_fixture("colon_mixed_with_equals");
+}
+
+#[test]
 fn fixture_funccall_multiline_object_arg() {
     // Same bug surface as the opinionated regression — affects
     // both styles since the recursion happens in the shared
