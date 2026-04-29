@@ -119,3 +119,13 @@ fn fixture_tfvars_object_recursion() {
 fn fixture_tfvars_with_top_level_comment() {
     run_fixture("tfvars_with_top_level_comment");
 }
+
+#[test]
+fn fixture_opinionated_collapses_blank_groups() {
+    // Regression: opinionated mode must IGNORE author blank
+    // lines inside a block. All single-line attrs collapse into
+    // one tier sorted alphabetically; multi-line attrs collapse
+    // into the next tier sorted alphabetically. Blank-line
+    // group preservation is a Minimal-mode-only behaviour.
+    run_fixture("opinionated_collapses_blank_groups");
+}

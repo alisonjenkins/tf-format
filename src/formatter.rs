@@ -218,9 +218,17 @@ pub fn format_body(body: &mut Body, depth: usize, style: FormatStyle) {
         }
     }
 
-    // Split into blank-line-separated groups, then process each group
-    // independently through the 4-tier partition.
-    let groups = split_body_groups(structures);
+    // Split into blank-line-separated groups under minimal style.
+    // Opinionated style ignores author blank lines: the whole body
+    // is one logical group so all single-line attrs collapse into
+    // the priority/normal-single tier (sorted alphabetically) and
+    // multi-line attrs/blocks fall into the multi tiers (also
+    // sorted) — no blank-line-driven sub-grouping.
+    let groups = if style.is_opinionated() {
+        vec![structures]
+    } else {
+        split_body_groups(structures)
+    };
     let mut any_emitted = false;
 
     for (group_idx, group_structures) in groups.into_iter().enumerate() {
@@ -654,9 +662,15 @@ fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
         format_expression(value.expr_mut(), depth + 1, style);
     }
 
-    // Split entries into blank-line-separated groups. Each group will be
-    // sorted and aligned independently.
-    let groups = split_object_groups(entries);
+    // Split entries into blank-line-separated groups under
+    // minimal style. Opinionated style ignores author blank
+    // lines: the whole object is one logical group so all
+    // single-line keys collapse and sort together.
+    let groups = if style.is_opinionated() {
+        vec![entries]
+    } else {
+        split_object_groups(entries)
+    };
 
     // Process each group: partition single/multi, sort, align, re-insert.
     let mut is_first = true;
@@ -891,9 +905,17 @@ pub fn sort_top_level(body: &mut Body, style: FormatStyle) {
     for (kind, group) in runs {
         match kind {
             TopLevelRunKind::Attr => {
-                // Preserve user-authored blank-line groups within the run, then
-                // format each group with zero indent via the shared helper.
-                for (sub_idx, sub_group) in split_body_groups(group).into_iter().enumerate() {
+                // Minimal: preserve user-authored blank-line groups
+                // within the run, format each independently.
+                // Opinionated: ignore blank-line groups so all
+                // single-line attrs collapse + sort across the
+                // entire run (matches the in-block semantic).
+                let sub_groups = if style.is_opinionated() {
+                    vec![group]
+                } else {
+                    split_body_groups(group)
+                };
+                for (sub_idx, sub_group) in sub_groups.into_iter().enumerate() {
                     let want_group_blank = (any_emitted && sub_idx == 0) || sub_idx > 0;
                     any_emitted = format_structure_group(
                         body,

@@ -206,6 +206,24 @@ instance_type = "t2.micro"
 - Trailing whitespace stripped from all lines
 - File always ends with exactly one newline
 
+### 9. Author blank lines
+
+In **opinionated** style, author-placed blank lines inside a
+block / object are NOT preserved as alignment-group boundaries.
+Every single-line attribute collapses into the priority/normal
+single tier (sorted alphabetically) and every multi-line
+attribute or nested block falls into the multi tier (also
+sorted) — regardless of where the author put blank lines.
+tf-format's tier layout still inserts a single blank line
+between priority and normal tiers, and between single-line and
+multi-line tiers, so the output stays readable.
+
+In **minimal** style (the `terraform fmt` / `tofu fmt` parity
+mode), author blank lines DO act as alignment-group boundaries:
+each blank-line-separated group sorts/aligns independently and
+source order is preserved. Use minimal when you want to keep
+intentional visual grouping the author wrote.
+
 ## Styles
 
 tf-format ships two styles:
