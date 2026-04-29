@@ -496,11 +496,19 @@ fn format_expression(expr: &mut Expression, depth: usize, style: FormatStyle) {
             format_expression(&mut trav.expr, depth, style);
         }
         Expression::ForExpr(for_expr) => {
-            format_expression(&mut for_expr.intro.collection_expr, depth, style);
+            // The for-expression's `for ... in C : K => V` line lives
+            // one level inside the for-expression's outer `[`/`{`.
+            // Sub-expressions whose CONTENT spans multiple lines
+            // (most commonly `value_expr` when it's an object or
+            // array) need their inner depth bumped by one so the
+            // keys/elements line up at the right column. Without the
+            // bump, an inner `{ name = ..., type = ... }` lands at
+            // the same indent as the for-line itself.
+            format_expression(&mut for_expr.intro.collection_expr, depth + 1, style);
             if let Some(key_expr) = &mut for_expr.key_expr {
-                format_expression(key_expr, depth, style);
+                format_expression(key_expr, depth + 1, style);
             }
-            format_expression(&mut for_expr.value_expr, depth, style);
+            format_expression(&mut for_expr.value_expr, depth + 1, style);
         }
         Expression::UnaryOp(op) => {
             format_expression(&mut op.expr, depth, style);

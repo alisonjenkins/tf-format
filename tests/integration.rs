@@ -121,6 +121,15 @@ fn fixture_tfvars_with_top_level_comment() {
 }
 
 #[test]
+fn fixture_for_expr_value_indent() {
+    // Regression: the value position of an object for-expression
+    // (`{ for x in C : K => { ... } }`) must indent its inner
+    // members one level DEEPER than the for-line, not at the
+    // same column. Recurse into for_expr.value_expr at depth+1.
+    run_fixture("for_expr_value_indent");
+}
+
+#[test]
 fn fixture_opinionated_collapses_blank_groups() {
     // Regression: opinionated mode must IGNORE author blank
     // lines inside a block. All single-line attrs collapse into

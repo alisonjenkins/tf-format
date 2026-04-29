@@ -97,3 +97,11 @@ fn fixture_wide_object_not_expanded() {
     // mode leaves it on one line (opinionated would expand).
     run_minimal_fixture("wide_object_not_expanded");
 }
+
+#[test]
+fn fixture_for_expr_value_indent() {
+    // Regression mirror of the opinionated-mode test: object
+    // for-expression value position must indent inner keys
+    // one level deeper than the for-line.
+    run_minimal_fixture("for_expr_value_indent");
+}
