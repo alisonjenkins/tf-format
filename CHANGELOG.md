@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.3.0](https://github.com/alisonjenkins/tf-format/compare/v0.2.1...v0.3.0) (2026-04-29)
+
+
+### Features
+
+* format top-level attributes in tfvars files ([6556a96](https://github.com/alisonjenkins/tf-format/commit/6556a96757b901f3a88f8fd8fd783c8f11f4be5b))
+* minimal style — terraform fmt / tofu fmt parity mode ([937610e](https://github.com/alisonjenkins/tf-format/commit/937610ed24e031d496fdf2ff82e762879ab397ac))
+* **opinionated:** collapse author blank lines for full reflow ([ec711e4](https://github.com/alisonjenkins/tf-format/commit/ec711e4e9404011e8acdc7de7af1e93c801e6228))
+* preserve blank-line-separated alignment groups ([9d52488](https://github.com/alisonjenkins/tf-format/commit/9d5248837f47d7491727468b514b1f779de00de5))
+* recurse format_expression into compound expressions ([9a4a8ba](https://github.com/alisonjenkins/tf-format/commit/9a4a8ba9635e8a29b2a8afbfca72e4140b3fc9fe))
+
+
+### Bug Fixes
+
+* **formatter:** for-expression value position needs depth+1 indent ([4a8abff](https://github.com/alisonjenkins/tf-format/commit/4a8abffcfe644b30a8251a268e6fa19191372358))
+* **formatter:** FuncCall args at depth+1 when multi-line ([3d67d19](https://github.com/alisonjenkins/tf-format/commit/3d67d19ba26711dc01abf49bbbb0a8d1c0d97351))
+
 ## [0.2.1](https://github.com/alisonjenkins/tf-format/compare/v0.2.0...v0.2.1) (2026-04-07)
 
 
