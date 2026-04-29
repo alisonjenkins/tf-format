@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/alisonjenkins/tf-format/compare/v0.4.0...v0.4.1) (2026-04-29)
+
+
+### Bug Fixes
+
+* **formatter:** match tofu fmt for `:` object assignment (issue [#18](https://github.com/alisonjenkins/tf-format/issues/18)) ([6512daa](https://github.com/alisonjenkins/tf-format/commit/6512daa96ae5f181002c3e4445109f22c486276e))
+
 ## [0.4.0](https://github.com/alisonjenkins/tf-format/compare/v0.3.0...v0.4.0) (2026-04-29)
 
 
