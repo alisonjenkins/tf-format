@@ -119,13 +119,15 @@ Options:
 
 tf-format can be used as a [pre-commit](https://pre-commit.com) or [prek](https://prek.j178.dev/) hook:
 
+<!-- x-release-please-start-version -->
 ```yaml
 repos:
 - repo: https://github.com/alisonjenkins/tf-format
-  rev: v0.2.1  # pin to a release tag
+  rev: v0.4.1  # pin to a release tag
   hooks:
   - id: tf-format
 ```
+<!-- x-release-please-end -->
 
 ### Supported file types
 

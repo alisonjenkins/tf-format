@@ -5,7 +5,8 @@
   "include-v-in-tag": true,
   "packages": {
     ".": {
-      "package-name": "tf-format"
+      "package-name": "tf-format",
+      "extra-files": ["README.md"]
     }
   }
 }
