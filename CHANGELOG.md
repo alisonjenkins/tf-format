@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.2](https://github.com/alisonjenkins/tf-format/compare/v0.4.1...v0.4.2) (2026-05-26)
+
+
+### Bug Fixes
+
+* **formatter:** block-type-aware priority attribute hoisting ([#30](https://github.com/alisonjenkins/tf-format/issues/30)) ([36992bf](https://github.com/alisonjenkins/tf-format/commit/36992bf81a485534291ef642b743b8caa01d77ea))
+
 ## [0.4.1](https://github.com/alisonjenkins/tf-format/compare/v0.4.0...v0.4.1) (2026-04-29)
 
 
