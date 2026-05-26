@@ -33,33 +33,53 @@ impl FormatStyle {
     }
 }
 
-/// Attributes that are meta-arguments or module-specific and should appear at
-/// the top of a block, in this fixed order.
-const PRIORITY_ATTRS: &[&str] = &[
-    "source",
-    "version",
-    "count",
-    "for_each",
-    "provider",
-    "depends_on",
-];
-
-/// Blocks that are meta-arguments and should appear at the top of a block.
-const PRIORITY_BLOCKS: &[&str] = &["lifecycle"];
+/// Per-block-type priority lists. Hoisting is block-type-aware: an attribute
+/// is only treated as a priority (meta-argument) inside the block types where
+/// it is actually a meta-argument. Nested blocks — anything below a top-level
+/// block — get no hoisting at all (`None`).
+///
+/// See <https://github.com/alisonjenkins/tf-format/issues/30>.
+fn priorities_for_block(ident: &str) -> (&'static [&'static str], &'static [&'static str]) {
+    match ident {
+        // resource / data / ephemeral / action share the same meta-args.
+        "resource" | "data" | "ephemeral" | "action" => {
+            (&["count", "for_each", "provider", "depends_on"], &["lifecycle"])
+        }
+        "module" => (
+            &["source", "version", "providers", "count", "for_each", "depends_on"],
+            &["lifecycle"],
+        ),
+        "import" => (&["for_each", "provider"], &[]),
+        "output" => (&["depends_on"], &[]),
+        "removed" => (&[], &["lifecycle"]),
+        // OpenTofu allows `for_each` on `provider`; Terraform does not. Hoisting
+        // it under both is harmless — `for_each` won't appear in a TF provider
+        // block in valid config.
+        "provider" => (&["for_each"], &[]),
+        _ => (&[], &[]),
+    }
+}
 
 /// Returns the priority index for a structure if it's a priority item, or None.
-fn priority_index(structure: &Structure) -> Option<usize> {
+///
+/// `parent_ident` is the identifier of the block whose body this structure
+/// lives directly inside (`Some("resource")`, `Some("module")`, ...). `None`
+/// means "no hoisting applies" — used for nested blocks at depth ≥ 1 and for
+/// top-level attribute runs (tfvars-style files).
+fn priority_index(structure: &Structure, parent_ident: Option<&str>) -> Option<usize> {
+    let ident = parent_ident?;
+    let (attrs, blocks) = priorities_for_block(ident);
     match structure {
         Structure::Attribute(attr) => {
             let key = attr.key.as_str();
-            PRIORITY_ATTRS.iter().position(|&k| k == key)
+            attrs.iter().position(|&k| k == key)
         }
         Structure::Block(block) => {
-            let ident = block.ident.as_str();
-            PRIORITY_BLOCKS
+            let bident = block.ident.as_str();
+            blocks
                 .iter()
-                .position(|&k| k == ident)
-                .map(|i| PRIORITY_ATTRS.len() + i)
+                .position(|&k| k == bident)
+                .map(|i| attrs.len() + i)
         }
     }
 }
@@ -194,7 +214,12 @@ fn adjust_structure_prefix(structure: &mut Structure, want_blank_line: bool, ind
 ///
 /// Under [`FormatStyle::Minimal`] the partitioning + sorting is
 /// suppressed; only `=` alignment within blank-line groups runs.
-pub fn format_body(body: &mut Body, depth: usize, style: FormatStyle) {
+pub fn format_body(
+    body: &mut Body,
+    depth: usize,
+    parent_ident: Option<&str>,
+    style: FormatStyle,
+) {
     let indent = "  ".repeat(depth + 1);
 
     // Preserve body-level metadata
@@ -206,11 +231,12 @@ pub fn format_body(body: &mut Body, depth: usize, style: FormatStyle) {
     let old_body = std::mem::take(body);
     let mut structures: Vec<Structure> = old_body.into_iter().collect();
 
-    // Recurse into nested blocks and expressions
+    // Recurse into nested blocks and expressions. Nested blocks always pass
+    // `None` for parent_ident — hoisting is suppressed below the top level.
     for structure in &mut structures {
         match structure {
             Structure::Block(block) => {
-                format_body(&mut block.body, depth + 1, style);
+                format_body(&mut block.body, depth + 1, None, style);
             }
             Structure::Attribute(attr) => {
                 format_expression(&mut attr.value, depth + 1, style);
@@ -239,6 +265,7 @@ pub fn format_body(body: &mut Body, depth: usize, style: FormatStyle) {
             &indent,
             want_group_blank,
             any_emitted,
+            parent_ident,
             style,
         );
     }
@@ -261,6 +288,7 @@ fn format_structure_group(
     indent: &str,
     want_group_blank: bool,
     any_emitted_before: bool,
+    parent_ident: Option<&str>,
     style: FormatStyle,
 ) -> bool {
     if !style.is_opinionated() {
@@ -279,7 +307,7 @@ fn format_structure_group(
     let mut normal_multi: Vec<Structure> = Vec::new();
 
     for s in group {
-        if priority_index(&s).is_some() {
+        if priority_index(&s, parent_ident).is_some() {
             if is_multiline(&s) {
                 priority_multi.push(s);
             } else {
@@ -292,8 +320,8 @@ fn format_structure_group(
         }
     }
 
-    priority_single.sort_by_key(|s| priority_index(s).unwrap_or(usize::MAX));
-    priority_multi.sort_by_key(|s| priority_index(s).unwrap_or(usize::MAX));
+    priority_single.sort_by_key(|s| priority_index(s, parent_ident).unwrap_or(usize::MAX));
+    priority_multi.sort_by_key(|s| priority_index(s, parent_ident).unwrap_or(usize::MAX));
     normal_single.sort_by_key(sort_key);
     normal_multi.sort_by_key(sort_key);
 
@@ -928,7 +956,8 @@ pub fn sort_top_level(body: &mut Body, style: FormatStyle) {
     for structure in &mut structures {
         match structure {
             Structure::Block(block) => {
-                format_body(&mut block.body, 0, style);
+                let ident = block.ident.as_str().to_string();
+                format_body(&mut block.body, 0, Some(&ident), style);
             }
             Structure::Attribute(attr) => {
                 format_expression(&mut attr.value, 0, style);
@@ -988,6 +1017,7 @@ pub fn sort_top_level(body: &mut Body, style: FormatStyle) {
                         "",
                         want_group_blank,
                         any_emitted,
+                        None,
                         style,
                     );
                 }

@@ -155,3 +155,42 @@ fn fixture_opinionated_collapses_blank_groups() {
     // group preservation is a Minimal-mode-only behaviour.
     run_fixture("opinionated_collapses_blank_groups");
 }
+
+#[test]
+fn fixture_nested_block_no_hoist() {
+    // Issue #30: priority attribute hoisting is block-type-aware.
+    // `version` inside `secret_key_ref` (a nested provider-specific
+    // block) is a plain domain attribute, not a meta-argument — it
+    // must stay alongside its sibling `secret` and not get hoisted.
+    run_fixture("nested_block_no_hoist");
+}
+
+#[test]
+fn fixture_module_providers_hoisted() {
+    // Issue #30: `providers` (plural) is a `module`-only meta-arg
+    // and should hoist alongside source/version.
+    run_fixture("module_providers_hoisted");
+}
+
+#[test]
+fn fixture_output_depends_on() {
+    // Issue #30: only `depends_on` is a meta-arg on `output` blocks.
+    // Other attrs (description/value/sensitive) stay in the normal
+    // tier.
+    run_fixture("output_depends_on");
+}
+
+#[test]
+fn fixture_import_meta_args() {
+    // Issue #30: `import` block hoists `for_each` and `provider`
+    // (no `depends_on`, no `version`).
+    run_fixture("import_meta_args");
+}
+
+#[test]
+fn fixture_provider_no_version_hoist() {
+    // Issue #30: `version` inside `provider` blocks (the deprecated
+    // form) is no longer hoisted — only `for_each` is a meta-arg
+    // here (per OpenTofu). `version` is treated as a normal attr.
+    run_fixture("provider_no_version_hoist");
+}
