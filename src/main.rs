@@ -85,6 +85,23 @@ fn run(cli: &Cli) -> Result<(), CliError> {
 
         let output = tf_format::format_hcl_with(&input, &opts)?;
 
+        // In --check / --diff mode, stdin must not blindly emit the formatted
+        // body (that would give an editor/CI integration a false OK). Report
+        // whether the input was already formatted instead.
+        if cli.check {
+            if input == output {
+                return Ok(());
+            }
+            return Err(CliError::CheckFailed { count: 1 });
+        }
+
+        if cli.diff {
+            if input != output {
+                print_diff(Path::new("<stdin>"), &input, &output);
+            }
+            return Ok(());
+        }
+
         io::stdout()
             .write_all(output.as_bytes())
             .map_err(CliError::WriteStdout)?;
@@ -176,16 +193,12 @@ fn process_file(
 
 fn print_diff(path: &Path, original: &str, formatted: &str) {
     let path_str = path.display().to_string();
-    println!("--- {path_str}");
-    println!("+++ {path_str}");
-
-    for (i, (orig_line, fmt_line)) in original.lines().zip(formatted.lines()).enumerate() {
-        if orig_line != fmt_line {
-            println!("@@ -{line} +{line} @@", line = i + 1);
-            println!("-{orig_line}");
-            println!("+{fmt_line}");
-        }
-    }
+    // A real unified diff: the previous hand-rolled version zipped the two line
+    // iterators, so net insertions/deletions (changed line counts) were
+    // dropped or shown as bogus pairs. similar produces correct hunks with
+    // context, insertions, and deletions.
+    let diff = similar::TextDiff::from_lines(original, formatted);
+    print!("{}", diff.unified_diff().header(&path_str, &path_str));
 }
 
 fn discover_files(inputs: &[String]) -> Result<Vec<PathBuf>, DiscoverFilesError> {

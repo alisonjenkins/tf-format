@@ -138,6 +138,66 @@ fn write_formats_good_files_despite_broken_file() {
     assert_eq!(formatted, "variable \"a\" {}\n\nvariable \"b\" {}\n");
 }
 
+#[test]
+fn stdin_check_dirty_exits_nonzero_without_body() {
+    let assert = tf()
+        .arg("--stdin")
+        .arg("--check")
+        .write_stdin(DIRTY)
+        .assert()
+        .failure();
+    // Must not print the formatted body on the output channel.
+    assert!(
+        assert.get_output().stdout.is_empty(),
+        "stdout should be empty in --stdin --check mode"
+    );
+}
+
+#[test]
+fn stdin_check_clean_exits_zero() {
+    tf().arg("--stdin")
+        .arg("--check")
+        .write_stdin("variable \"a\" {}\n")
+        .assert()
+        .success();
+}
+
+#[test]
+fn stdin_diff_reports_inserted_lines() {
+    let assert = tf()
+        .arg("--stdin")
+        .arg("--diff")
+        .write_stdin(DIRTY)
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout).into_owned();
+
+    // A real unified diff: headers, a hunk, and the inserted blank line that
+    // the old line-zipping implementation dropped.
+    assert!(stdout.contains("@@"), "stdout: {stdout}");
+    assert!(stdout.contains("-variable \"b\" {}"), "stdout: {stdout}");
+    assert!(stdout.contains("+variable \"b\" {}"), "stdout: {stdout}");
+}
+
+#[test]
+fn bom_prefixed_file_is_formatted_not_errored() {
+    let dir = tmpdir();
+    let file = dir.path().join("main.tf");
+    // A leading UTF-8 BOM used to make hcl-edit's parser error out, so the
+    // file was never formatted. It must now format cleanly (BOM stripped).
+    write(&file, "\u{feff}variable \"a\" {}\n");
+
+    tf().arg(&file).assert().success();
+
+    let formatted =
+        fs::read_to_string(&file).unwrap_or_else(|e| panic!("failed to read back main.tf: {e}"));
+    assert_eq!(formatted, "variable \"a\" {}\n");
+    assert!(
+        !formatted.starts_with('\u{feff}'),
+        "BOM should have been stripped"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn symlink_cycle_terminates() {

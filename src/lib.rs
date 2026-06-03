@@ -60,6 +60,11 @@ pub fn format_hcl(input: &str) -> Result<String, FormatError> {
 /// canonicalisation on a repo (e.g. when integrating with a
 /// language server that needs to match `terraform fmt` output).
 pub fn format_hcl_with(input: &str, opts: &FormatOptions) -> Result<String, FormatError> {
+    // hcl-edit rejects a leading UTF-8 BOM, but `terraform fmt` tolerates it
+    // and editors (notably on Windows) routinely emit one. Strip it before
+    // parsing so a BOM-prefixed file formats instead of erroring.
+    let input = input.strip_prefix('\u{feff}').unwrap_or(input);
+
     let mut body: Body = input.parse()?;
 
     // sort_top_level handles both block ordering and top-level attribute
