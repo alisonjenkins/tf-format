@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.4.3](https://github.com/alisonjenkins/tf-format/compare/v0.4.2...v0.4.3) (2026-06-03)
+
+
+### Bug Fixes
+
+* **deps:** update rust crate similar to v3 ([#40](https://github.com/alisonjenkins/tf-format/issues/40)) ([f48fa3e](https://github.com/alisonjenkins/tf-format/commit/f48fa3ef9db8adcb70f75f5a5752f43bed53ba31))
+* **formatter:** align heredoc openers in minimal mode (tofu parity) ([#41](https://github.com/alisonjenkins/tf-format/issues/41)) ([8fbf35a](https://github.com/alisonjenkins/tf-format/commit/8fbf35a7b1ca77e4462d47658924e33b0c72b771))
+* resolve audit backlog — data-loss bugs, CLI robustness, coverage ([#38](https://github.com/alisonjenkins/tf-format/issues/38)) ([bfbd3e3](https://github.com/alisonjenkins/tf-format/commit/bfbd3e39731f5a77ee2d614b23fd6cc41fa7ade6))
+
 ## [0.4.2](https://github.com/alisonjenkins/tf-format/compare/v0.4.1...v0.4.2) (2026-05-26)
 
 
