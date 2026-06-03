@@ -1,8 +1,13 @@
 locals {
-  script = <<-EOT
-    line with spaces   
-    	tab line	
+  z_script = <<-EOT
+    deploy step   
+    	indented tab line	
 
-    blank above kept
+    trailing blank above kept
   EOT
+  a_name   = "demo"
+  config   = <<EOF
+plain heredoc line with spaces    
+no indent strip here
+EOF
 }

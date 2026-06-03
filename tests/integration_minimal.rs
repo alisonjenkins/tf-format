@@ -144,3 +144,12 @@ fn fixture_heredoc_preserved() {
     // is literal content and must be preserved byte-for-byte.
     run_minimal_fixture("heredoc_preserved");
 }
+
+#[test]
+fn fixture_heredoc_alignment() {
+    // A heredoc opener's `=` stays inside the surrounding alignment
+    // group (its `=` is on a single line), so adjacent single-line
+    // attributes align with it — matching `tofu fmt`. Covers both body
+    // and object contexts.
+    run_minimal_fixture("heredoc_alignment");
+}

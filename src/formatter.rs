@@ -488,7 +488,22 @@ fn align_body_attributes_in_place(structures: &mut [Structure]) {
 }
 
 fn is_single_line_attribute(s: &Structure) -> bool {
-    matches!(s, Structure::Attribute(_)) && !is_multiline(s)
+    matches!(s, Structure::Attribute(attr) if !is_multiline(s) || is_heredoc_expr(&attr.value))
+}
+
+/// True if an expression is a heredoc template (`<<EOT` / `<<-EOT`). Although a
+/// heredoc spans multiple lines, its `=` sits on the opening line, so
+/// `terraform fmt` / `tofu fmt` keep it inside the surrounding `=` alignment
+/// group — unlike a multi-line object or array value, which break the group.
+fn is_heredoc_expr(expr: &Expression) -> bool {
+    matches!(expr, Expression::HeredocTemplate(_))
+}
+
+/// True if an object value spans multiple lines in a way that breaks an `=`
+/// alignment run. A heredoc value spans lines but keeps its `=` on the opening
+/// line, so it does NOT break the run.
+fn object_value_breaks_alignment(value: &hcl_edit::expr::ObjectValue) -> bool {
+    value.expr().to_string().contains('\n') && !is_heredoc_expr(value.expr())
 }
 
 /// Split body structures into groups separated by blank lines. The Body
@@ -962,14 +977,16 @@ fn align_object_entries_in_place(entries: &mut [(ObjectKey, hcl_edit::expr::Obje
     let mut i = 0;
     while i < entries.len() {
         // Skip multi-line entries — give them the canonical single
-        // space on either side of `=` and advance.
-        while i < entries.len() && entries[i].1.expr().to_string().contains('\n') {
+        // space on either side of `=` and advance. Heredoc values are NOT
+        // skipped: their `=` is on the opening line, so they align with their
+        // single-line neighbours (matching `tofu fmt`).
+        while i < entries.len() && object_value_breaks_alignment(&entries[i].1) {
             entries[i].0.decor_mut().set_suffix(" ");
             entries[i].1.expr_mut().decor_mut().set_prefix(" ");
             i += 1;
         }
         let run_start = i;
-        while i < entries.len() && !entries[i].1.expr().to_string().contains('\n') {
+        while i < entries.len() && !object_value_breaks_alignment(&entries[i].1) {
             // Comments attached to a key break the alignment run.
             if i > run_start && !extract_key_comments(&entries[i].0).is_empty() {
                 break;
