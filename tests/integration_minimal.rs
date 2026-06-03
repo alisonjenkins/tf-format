@@ -87,6 +87,14 @@ fn fixture_preserve_blank_lines() {
 }
 
 #[test]
+fn fixture_heredoc_indent_marker_preserved() {
+    // `tofu fmt` keeps the literal `<<-` marker even when a body line
+    // has zero indent (nothing to dedent); hcl-edit otherwise drops it.
+    // (issue #43)
+    run_minimal_fixture("heredoc_indent_marker_preserved");
+}
+
+#[test]
 fn fixture_comments_preserved() {
     // Comments break alignment runs and travel with their
     // associated attribute. Source order preserved.

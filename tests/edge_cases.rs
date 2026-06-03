@@ -128,6 +128,42 @@ fn opinionated_does_not_strip_blank_lines_inside_heredoc() {
 }
 
 #[test]
+fn indented_heredoc_marker_preserved_when_body_has_zero_indent_line() {
+    // issue #43: hcl-edit drops the `-` from `<<-EOT` when a body line has no
+    // leading whitespace (nothing to dedent). `terraform fmt` / `tofu fmt`
+    // preserve the literal marker, so tf-format must too — in both styles.
+    let input = "locals {\n  x = <<-EOT\n    foo\n}\n  EOT\n}\n";
+
+    let out = fmt(input);
+    assert!(
+        out.contains("<<-EOT"),
+        "opinionated dropped the `<<-` marker: {out:?}"
+    );
+    assert_eq!(fmt(&out), out, "marker preservation must be idempotent");
+
+    let out_min = format_hcl_with(input, &FormatOptions::minimal())
+        .unwrap_or_else(|e| panic!("minimal format failed: {e}"));
+    assert!(
+        out_min.contains("<<-EOT"),
+        "minimal dropped the `<<-` marker: {out_min:?}"
+    );
+    // Body content is unchanged — the marker change is cosmetic, never lossy.
+    assert!(
+        out_min.contains("    foo\n}\n"),
+        "heredoc body altered: {out_min:?}"
+    );
+}
+
+#[test]
+fn plain_heredoc_marker_not_promoted_to_indented() {
+    // The inverse must hold: a plain `<<EOT` must never gain a `-`.
+    let input = "locals {\n  x = <<EOT\nfoo\n  EOT\n}\n";
+    let out = fmt(input);
+    assert!(out.contains("<<EOT"), "marker changed: {out:?}");
+    assert!(!out.contains("<<-EOT"), "plain heredoc gained `-`: {out:?}");
+}
+
+#[test]
 fn invalid_hcl_returns_typed_parse_error() {
     // An unparseable input must surface a typed error, not panic.
     let err = match format_hcl("variable \"a\" {") {
