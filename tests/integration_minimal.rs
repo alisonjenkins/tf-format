@@ -78,6 +78,15 @@ fn fixture_blank_line_groups() {
 }
 
 #[test]
+fn fixture_preserve_blank_lines() {
+    // `tofu fmt` preserves blank lines verbatim — runs of 2+ are
+    // NOT collapsed, and blanks before a closing `}` / `]` are
+    // kept — in bodies, objects, and arrays alike. expected.tf is
+    // byte-identical to `tofu fmt` output. (issue #35)
+    run_minimal_fixture("preserve_blank_lines");
+}
+
+#[test]
 fn fixture_comments_preserved() {
     // Comments break alignment runs and travel with their
     // associated attribute. Source order preserved.

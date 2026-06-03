@@ -96,6 +96,11 @@ fn fixture_blank_line_groups() {
 }
 
 #[test]
+fn fixture_empty_lines_in_arrays() {
+    run_fixture("empty_lines_in_arrays");
+}
+
+#[test]
 fn fixture_tfvars_singles_only() {
     run_fixture("tfvars_singles_only");
 }

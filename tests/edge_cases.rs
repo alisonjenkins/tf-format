@@ -83,6 +83,51 @@ fn non_ascii_keys_round_trip_idempotently() {
 }
 
 #[test]
+fn opinionated_drops_array_blank_lines_but_keeps_comments() {
+    // issue #35: opinionated mode removes every blank line inside a multi-line
+    // array (between elements and before `]`), but comments must survive.
+    let input = "x = [\n  \"a\",\n\n  # keep me\n  \"b\",\n\n\n]\n";
+    let out = fmt(input);
+    assert_eq!(out, "x = [\n  \"a\",\n  # keep me\n  \"b\",\n]\n");
+    assert_eq!(
+        fmt(&out),
+        out,
+        "array blank-line cleanup must be idempotent"
+    );
+}
+
+#[test]
+fn opinionated_strips_blank_lines_before_closing_brace() {
+    // issue #35: trailing blank lines before a block's closing `}` are removed
+    // in opinionated mode, at every nesting level.
+    let input = "resource \"a\" \"b\" {\n  nested {\n    x = 1\n\n\n  }\n\n\n}\n";
+    let out = fmt(input);
+    assert_eq!(
+        out,
+        "resource \"a\" \"b\" {\n  nested {\n    x = 1\n  }\n}\n"
+    );
+    assert_eq!(fmt(&out), out);
+}
+
+#[test]
+fn opinionated_does_not_strip_blank_lines_inside_heredoc() {
+    // A `}` line or blank line *inside* a heredoc body is literal data and must
+    // not be touched by the closing-brace blank-line cleanup.
+    let input = "locals {\n  x = <<EOT\n    foo\n\n}\n  EOT\n\n\n}\n";
+    let out = fmt(input);
+    assert!(
+        out.contains("    foo\n\n}\n"),
+        "heredoc body blank line / brace line was altered: {out:?}"
+    );
+    // The blank lines AFTER the heredoc closes, before the block `}`, are gone.
+    assert!(
+        out.ends_with("  EOT\n}\n"),
+        "trailing blanks not stripped: {out:?}"
+    );
+    assert_eq!(fmt(&out), out);
+}
+
+#[test]
 fn invalid_hcl_returns_typed_parse_error() {
     // An unparseable input must surface a typed error, not panic.
     let err = match format_hcl("variable \"a\" {") {
