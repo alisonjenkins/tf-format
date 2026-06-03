@@ -183,12 +183,36 @@ fn process_file(
         return Ok(true);
     }
 
-    std::fs::write(path, &output).map_err(|source| ProcessFileError::WriteFile {
+    write_atomically(path, &output).map_err(|source| ProcessFileError::WriteFile {
         path: path.to_path_buf(),
         source,
     })?;
 
     Ok(true)
+}
+
+/// Write `contents` to `path` atomically: write to a temp file in the same
+/// directory, flush it, then rename it over the original. A crash mid-write
+/// can never leave a `.tf` file truncated or empty — the rename either
+/// completes or it doesn't. The original file's permissions are preserved.
+fn write_atomically(path: &Path, contents: &str) -> io::Result<()> {
+    let dir = match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    };
+
+    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+    tmp.write_all(contents.as_bytes())?;
+    tmp.flush()?;
+
+    // Preserve the original file's permissions on the replacement.
+    if let Ok(meta) = std::fs::metadata(path) {
+        let _ = tmp.as_file().set_permissions(meta.permissions());
+    }
+
+    // Same directory => same filesystem => the rename is atomic.
+    tmp.persist(path).map_err(|e| e.error)?;
+    Ok(())
 }
 
 fn print_diff(path: &Path, original: &str, formatted: &str) {

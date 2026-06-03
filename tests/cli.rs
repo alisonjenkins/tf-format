@@ -200,6 +200,31 @@ fn bom_prefixed_file_is_formatted_not_errored() {
 
 #[cfg(unix)]
 #[test]
+fn in_place_write_preserves_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tmpdir();
+    let file = dir.path().join("main.tf");
+    write(&file, DIRTY);
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o640))
+        .unwrap_or_else(|e| panic!("failed to set perms: {e}"));
+
+    tf().arg(&file).assert().success();
+
+    let mode = fs::metadata(&file)
+        .unwrap_or_else(|e| panic!("failed to stat: {e}"))
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o640, "atomic write should preserve file permissions");
+
+    let formatted =
+        fs::read_to_string(&file).unwrap_or_else(|e| panic!("failed to read back: {e}"));
+    assert_eq!(formatted, "variable \"a\" {}\n\nvariable \"b\" {}\n");
+}
+
+#[cfg(unix)]
+#[test]
 fn symlink_cycle_terminates() {
     let dir = tmpdir();
     write(&dir.path().join("main.tf"), DIRTY);
