@@ -147,6 +147,15 @@ fn fixture_for_expr_value_indent() {
 }
 
 #[test]
+fn fixture_object_comma_normalized() {
+    // BUG-5 regression: sorting a multi-line object whose entries mix
+    // comma and no-comma terminators must normalize them to one
+    // canonical form (newline-terminated, no trailing commas) rather
+    // than leaving a stray no-comma entry stranded in the middle.
+    run_fixture("object_comma_normalized");
+}
+
+#[test]
 fn fixture_block_comments() {
     // BUG-1 regression: multi-line `/* ... */` block comments must
     // survive reordering intact — over a reordered attribute, over a

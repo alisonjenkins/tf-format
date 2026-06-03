@@ -864,7 +864,7 @@ fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
 
         let has_single = !single.is_empty();
 
-        for (mut key, value) in single {
+        for (mut key, mut value) in single {
             let needs_leading_newline =
                 !is_first && !matches!(last_terminator, ObjectValueTerminator::Newline);
             let want_blank = need_group_blank && !group_blank_emitted;
@@ -876,16 +876,18 @@ fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
                 &indent,
             );
             key.decor_mut().set_prefix(prefix);
+            normalize_terminator(&mut value, style);
             last_terminator = value.terminator();
             obj.insert(key, value);
             is_first = false;
             group_blank_emitted = true;
         }
-        for (i, (mut key, value)) in multi.into_iter().enumerate() {
+        for (i, (mut key, mut value)) in multi.into_iter().enumerate() {
             let want_blank = (i > 0 || has_single) || (need_group_blank && !group_blank_emitted);
             let comments = extract_key_comments(&key);
             let prefix = build_object_key_prefix(is_first, want_blank, &comments, &indent);
             key.decor_mut().set_prefix(prefix);
+            normalize_terminator(&mut value, style);
             last_terminator = value.terminator();
             obj.insert(key, value);
             is_first = false;
@@ -905,6 +907,20 @@ fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
         _ => format!("\n{closing_indent}"),
     };
     obj.set_trailing(trailing);
+}
+
+/// Normalize a multi-line object entry's terminator to a single canonical
+/// form. Sorting an object can move a no-comma entry into the middle of
+/// comma-terminated entries, leaving inconsistent separators (`a = 1,` /
+/// `b = 2` / `c = 3,`). Under the opinionated style we render every entry
+/// newline-terminated (no trailing commas), the form already produced for the
+/// vast majority of multi-line objects; this makes the output uniform and
+/// idempotent regardless of the author's original separators. Minimal style is
+/// left untouched to preserve `tofu fmt` parity.
+fn normalize_terminator(value: &mut hcl_edit::expr::ObjectValue, style: FormatStyle) {
+    if style.is_opinionated() {
+        value.set_terminator(ObjectValueTerminator::Newline);
+    }
 }
 
 /// Align `=` across each contiguous run of single-line object
