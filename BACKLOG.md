@@ -41,12 +41,12 @@ lines** (violated Rule #8, broke idempotence) — fixed in `b624d5d`.
 
 ### New findings raised during the sweep (not yet actioned)
 
-- **Minimal mode breaks `=` alignment at a heredoc opener.** `tofu fmt` keeps a
-  heredoc attribute's opener (`x = <<EOT`) in the surrounding `=` alignment group; tf-format
-  treats the whole heredoc attribute as multi-line and excludes it, so an adjacent
-  single-line attr aligns to the wrong column. Surfaced by the new minimal-fixture tofu
-  sweep; the `heredoc_preserved` minimal fixture was narrowed to isolate body preservation
-  until this is fixed. Real minimal-parity gap.
+- ~~**Minimal mode breaks `=` alignment at a heredoc opener.**~~ ✅ fixed. A heredoc
+  attribute's opener (`x = <<EOT`) now stays in the surrounding `=` alignment group in
+  minimal mode (body and object contexts), matching `tofu fmt`; multi-line object/array
+  values still break the group, also matching tofu. Verified against real `tofu fmt`. The
+  `heredoc_preserved` minimal fixture was restored to its richer form and a dedicated
+  `heredoc_alignment` fixture added.
 
 - **Multibyte-key `=` alignment is measured in bytes, not display columns.** A key like
   `é` (2 bytes, 1 column) misaligns against ASCII keys in the same group. `tofu fmt`
