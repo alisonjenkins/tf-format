@@ -65,6 +65,15 @@ pub fn format_hcl_with(input: &str, opts: &FormatOptions) -> Result<String, Form
     // parsing so a BOM-prefixed file formats instead of erroring.
     let input = input.strip_prefix('\u{feff}').unwrap_or(input);
 
+    // An empty or whitespace-only file has no content to format. Collapse it to
+    // a stable empty result: this keeps an empty file byte-identical (so it is
+    // a no-op under `--check`, matching `terraform fmt`) and makes a
+    // whitespace-only file idempotent rather than oscillating between blank
+    // lines and a single newline across passes.
+    if input.trim().is_empty() {
+        return Ok(String::new());
+    }
+
     let mut body: Body = input.parse()?;
 
     // sort_top_level handles both block ordering and top-level attribute
