@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.4](https://github.com/alisonjenkins/tf-format/compare/v0.4.3...v0.4.4) (2026-06-03)
+
+
+### Bug Fixes
+
+* **formatter:** preserve `<<-` heredoc marker dropped by hcl-edit ([#43](https://github.com/alisonjenkins/tf-format/issues/43)) ([#45](https://github.com/alisonjenkins/tf-format/issues/45)) ([ba8b6a1](https://github.com/alisonjenkins/tf-format/commit/ba8b6a119ee2df548676f2ed2de4fa6a6600add6))
+* **formatter:** tidy blank lines in arrays and before closing braces ([#35](https://github.com/alisonjenkins/tf-format/issues/35)) ([#42](https://github.com/alisonjenkins/tf-format/issues/42)) ([3532bd9](https://github.com/alisonjenkins/tf-format/commit/3532bd93d74c437b22854cf1c0c87d94549f327c))
+
 ## [0.4.3](https://github.com/alisonjenkins/tf-format/compare/v0.4.2...v0.4.3) (2026-06-03)
 
 
