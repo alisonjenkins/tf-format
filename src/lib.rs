@@ -121,9 +121,12 @@ fn post_process(output: &str) -> String {
         }
     }
 
-    if !result.ends_with('\n') {
-        result.push('\n');
-    }
+    // Collapse any trailing blank lines so the file ends with exactly one
+    // newline (Rule #8). A trailing blank line can never be inside a heredoc
+    // (the heredoc is already closed by end of file), so this is safe.
+    let trimmed_len = result.trim_end_matches('\n').len();
+    result.truncate(trimmed_len);
+    result.push('\n');
     result
 }
 

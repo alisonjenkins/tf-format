@@ -147,6 +147,46 @@ fn fixture_for_expr_value_indent() {
 }
 
 #[test]
+fn fixture_sort_output_blocks() {
+    // TEST-4: a run of `output` blocks must sort alphabetically by name.
+    run_fixture("sort_output_blocks");
+}
+
+#[test]
+fn fixture_sort_data_type_then_name() {
+    // TEST-4: `data` blocks sort by type, then by name within a type.
+    run_fixture("sort_data_type_then_name");
+}
+
+#[test]
+fn fixture_sort_resource_name_tiebreak() {
+    // TEST-4: same-type resources sort on the second label (name),
+    // exercising label_sort_key's tie-break.
+    run_fixture("sort_resource_name_tiebreak");
+}
+
+#[test]
+fn fixture_preserve_module_order() {
+    // TEST-4 (negative): `module` blocks are NOT reordered, while an
+    // adjacent `variable` run still sorts.
+    run_fixture("preserve_module_order");
+}
+
+#[test]
+fn fixture_depends_on_priority() {
+    // TEST-8: single-line meta-args keep their fixed PRIORITY_ATTRS
+    // order (count, provider, depends_on), not alphabetical.
+    run_fixture("depends_on_priority");
+}
+
+#[test]
+fn fixture_whitespace_normalization() {
+    // TEST-7: trailing whitespace, tab indentation, and trailing blank
+    // lines normalize to 2-space indent + single trailing newline.
+    run_fixture("whitespace_normalization");
+}
+
+#[test]
 fn fixture_expand_object_with_key_prefix() {
     // IMP-2: the single-line-object expansion threshold must count the
     // `key = ` prefix. This object literal is under 80 columns on its

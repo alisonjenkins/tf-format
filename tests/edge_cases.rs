@@ -5,6 +5,7 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used)]
 
+use tf_format::error::FormatError;
 use tf_format::{FormatOptions, format_hcl, format_hcl_with};
 
 fn fmt(input: &str) -> String {
@@ -50,6 +51,50 @@ fn heredoc_trailing_whitespace_preserved() {
     );
     // And idempotent.
     assert_eq!(fmt(&out), out);
+}
+
+#[test]
+fn crlf_is_normalized_to_lf_and_idempotent() {
+    let out = fmt("variable \"b\" {}\r\nvariable \"a\" {}\r\n");
+    assert!(
+        !out.contains('\r'),
+        "CRLF should be normalized to LF: {out:?}"
+    );
+    assert_eq!(
+        fmt(&out),
+        out,
+        "post-normalization output must be idempotent"
+    );
+}
+
+#[test]
+fn non_ascii_keys_round_trip_idempotently() {
+    // Multibyte identifiers/keys must survive formatting and be idempotent.
+    // (Column alignment of multibyte keys is measured in bytes today; this
+    // test pins round-tripping, not the exact padding.)
+    let input = "locals {\n  obj = {\n    \u{e9}_key = 1\n    a_key  = 2\n  }\n}\n";
+    let once = fmt(input);
+    assert!(once.contains('\u{e9}'), "non-ASCII key was lost: {once:?}");
+    assert_eq!(
+        fmt(&once),
+        once,
+        "non-ASCII key formatting must be idempotent"
+    );
+}
+
+#[test]
+fn invalid_hcl_returns_typed_parse_error() {
+    // An unparseable input must surface a typed error, not panic.
+    let err = match format_hcl("variable \"a\" {") {
+        Ok(out) => panic!("expected a parse error, got output: {out:?}"),
+        Err(e) => e,
+    };
+    assert!(
+        matches!(err, FormatError::ParseHcl(_)),
+        "expected FormatError::ParseHcl, got: {err:?}"
+    );
+    // The Display impl should mention parsing.
+    assert!(format!("{err}").contains("parse"), "error display: {err}");
 }
 
 #[test]
