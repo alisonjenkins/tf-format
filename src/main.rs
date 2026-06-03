@@ -100,18 +100,34 @@ fn run(cli: &Cli) -> Result<(), CliError> {
     }
 
     let mut needs_formatting = Vec::new();
+    let mut failed = 0usize;
 
+    // Process every file even if some fail: a single unparseable or
+    // unreadable file must not abort the batch and leave the codebase
+    // half-formatted. Errors are reported as they occur; we exit
+    // non-zero at the end if any file failed.
     for path in &paths {
-        let changed = process_file(path, cli.check, cli.diff, &opts)?;
-        if changed {
-            needs_formatting.push(path.clone());
+        match process_file(path, cli.check, cli.diff, &opts) {
+            Ok(true) => needs_formatting.push(path.clone()),
+            Ok(false) => {}
+            Err(e) => {
+                eprintln!("Error: {e}");
+                failed += 1;
+            }
         }
     }
 
-    if cli.check && !needs_formatting.is_empty() {
+    if cli.check {
         for path in &needs_formatting {
             eprintln!("{}", path.display());
         }
+    }
+
+    if failed > 0 {
+        return Err(CliError::ProcessFailed { count: failed });
+    }
+
+    if cli.check && !needs_formatting.is_empty() {
         return Err(CliError::CheckFailed {
             count: needs_formatting.len(),
         });

@@ -74,4 +74,7 @@ pub enum CliError {
 
     #[error("{count} file(s) need formatting")]
     CheckFailed { count: usize },
+
+    #[error("{count} file(s) failed to process")]
+    ProcessFailed { count: usize },
 }

@@ -14,6 +14,9 @@ use tempfile::TempDir;
 /// Unformatted input (needs reordering under the opinionated style).
 const DIRTY: &str = "variable \"b\" {}\nvariable \"a\" {}\n";
 
+/// Unparseable input (unterminated block).
+const BROKEN: &str = "variable \"a\" {\n";
+
 fn tf() -> Command {
     Command::cargo_bin("tf-format")
         .unwrap_or_else(|e| panic!("failed to locate tf-format binary: {e}"))
@@ -102,6 +105,37 @@ fn clean_file_passes_check() {
     write(&dir.path().join("main.tf"), "variable \"a\" {}\n");
 
     tf().arg("--check").arg(dir.path()).assert().success();
+}
+
+#[test]
+fn check_continues_past_broken_file() {
+    let dir = tmpdir();
+    write(&dir.path().join("broken.tf"), BROKEN);
+    write(&dir.path().join("good.tf"), DIRTY);
+
+    let assert = tf().arg("--check").arg(dir.path()).assert().failure();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
+
+    // The broken file is reported, the good file is still checked and listed.
+    assert!(stderr.contains("broken.tf"), "stderr: {stderr}");
+    assert!(stderr.contains("good.tf"), "stderr: {stderr}");
+    assert!(stderr.contains("failed to process"), "stderr: {stderr}");
+}
+
+#[test]
+fn write_formats_good_files_despite_broken_file() {
+    let dir = tmpdir();
+    write(&dir.path().join("broken.tf"), BROKEN);
+    let good = dir.path().join("good.tf");
+    write(&good, DIRTY);
+
+    // Exit non-zero because one file failed...
+    tf().arg(dir.path()).assert().failure();
+
+    // ...but the healthy file was still formatted in place.
+    let formatted =
+        fs::read_to_string(&good).unwrap_or_else(|e| panic!("failed to read back good.tf: {e}"));
+    assert_eq!(formatted, "variable \"a\" {}\n\nvariable \"b\" {}\n");
 }
 
 #[cfg(unix)]
