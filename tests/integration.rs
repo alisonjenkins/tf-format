@@ -147,6 +147,16 @@ fn fixture_for_expr_value_indent() {
 }
 
 #[test]
+fn fixture_expand_object_with_key_prefix() {
+    // IMP-2: the single-line-object expansion threshold must count the
+    // `key = ` prefix. This object literal is under 80 columns on its
+    // own but crosses the budget once the long attribute name is
+    // included, so it must expand. The same object under a short key
+    // stays inline (see the short-key case in the CLI/edge tests).
+    run_fixture("expand_object_with_key_prefix");
+}
+
+#[test]
 fn fixture_object_comma_normalized() {
     // BUG-5 regression: sorting a multi-line object whose entries mix
     // comma and no-comma terminators must normalize them to one
