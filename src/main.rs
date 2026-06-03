@@ -182,8 +182,8 @@ fn discover_files(inputs: &[String]) -> Result<Vec<PathBuf>, DiscoverFilesError>
             collect_tf_files_recursive(input_path, &mut paths)?;
         } else if input_path.is_file() {
             paths.push(input_path.to_path_buf());
-        } else {
-            // Treat as glob pattern
+        } else if has_glob_metacharacters(input) {
+            // Treat as glob pattern.
             let entries = glob::glob(input).map_err(|source| DiscoverFilesError::GlobPattern {
                 pattern: input.clone(),
                 source,
@@ -195,10 +195,41 @@ fn discover_files(inputs: &[String]) -> Result<Vec<PathBuf>, DiscoverFilesError>
                     paths.push(path);
                 }
             }
+        } else {
+            // A literal path (no glob metacharacters) that is neither a file
+            // nor a directory does not exist. Fail loudly so a typo'd or
+            // deleted path doesn't silently pass `--check` in CI.
+            return Err(DiscoverFilesError::PathNotFound {
+                path: input_path.to_path_buf(),
+            });
         }
     }
 
-    Ok(paths)
+    Ok(dedup_paths(paths))
+}
+
+/// True if `input` contains any glob metacharacter, so it should be expanded
+/// as a pattern rather than treated as a literal path.
+fn has_glob_metacharacters(input: &str) -> bool {
+    input.contains(['*', '?', '[', ']'])
+}
+
+/// Canonicalize and deduplicate discovered paths, preserving first-seen order.
+/// A file reachable via several inputs (a duplicate argument, or a directory
+/// plus an overlapping glob) is processed once. Canonicalization failures fall
+/// back to the raw path so unreadable entries still surface downstream.
+fn dedup_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut seen = std::collections::HashSet::new();
+    let mut deduped = Vec::with_capacity(paths.len());
+
+    for path in paths {
+        let key = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+        if seen.insert(key) {
+            deduped.push(path);
+        }
+    }
+
+    deduped
 }
 
 fn collect_tf_files_recursive(
@@ -215,11 +246,34 @@ fn collect_tf_files_recursive(
             path: dir.to_path_buf(),
             source,
         })?;
+
+        // Use the entry's own file type (does NOT follow symlinks) so a symlink
+        // pointing at an ancestor can't send us into an infinite/redundant
+        // traversal. Symlinks are skipped entirely.
+        let file_type = entry
+            .file_type()
+            .map_err(|source| DiscoverFilesError::ReadDir {
+                path: dir.to_path_buf(),
+                source,
+            })?;
+        if file_type.is_symlink() {
+            continue;
+        }
+
         let path = entry.path();
 
-        if path.is_dir() {
+        if file_type.is_dir() {
+            // Skip dot-directories (e.g. `.terraform`, `.git`), matching
+            // `terraform fmt`, so vendored/cached modules aren't reformatted.
+            if entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with('.'))
+            {
+                continue;
+            }
             collect_tf_files_recursive(&path, paths)?;
-        } else if path.is_file()
+        } else if file_type.is_file()
             && let Some(ext) = path.extension().and_then(|e| e.to_str())
             && TF_EXTENSIONS.contains(&ext)
         {

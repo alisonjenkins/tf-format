@@ -50,6 +50,9 @@ pub enum DiscoverFilesError {
         #[source]
         source: std::io::Error,
     },
+
+    #[error("path '{}' does not exist", path.display())]
+    PathNotFound { path: PathBuf },
 }
 
 #[derive(Debug, thiserror::Error)]

@@ -11,4 +11,7 @@ hcl-edit = "0.9.6"
 thiserror = "2.0.18"
 
 [dev-dependencies]
+assert_cmd = "2.0.17"
+predicates = "3.1.3"
 pretty_assertions = "1.4.1"
+tempfile = "3.20.0"
