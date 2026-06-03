@@ -129,3 +129,18 @@ fn fixture_for_expr_value_indent() {
     // one level deeper than the for-line.
     run_minimal_fixture("for_expr_value_indent");
 }
+
+#[test]
+fn fixture_block_comments() {
+    // BUG-1 regression (minimal/tofu-parity): multi-line block
+    // comments must round-trip intact with source order preserved
+    // and star alignment kept — not truncated to unparseable output.
+    run_minimal_fixture("block_comments");
+}
+
+#[test]
+fn fixture_heredoc_preserved() {
+    // BUG-2 regression (minimal/tofu-parity): heredoc body whitespace
+    // is literal content and must be preserved byte-for-byte.
+    run_minimal_fixture("heredoc_preserved");
+}

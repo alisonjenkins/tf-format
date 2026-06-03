@@ -136,20 +136,81 @@ fn has_blank_line_after_other_terminator(prefix: &str) -> bool {
     prefix.contains("\n\n")
 }
 
-/// Extract comment lines from a decor prefix string.
+/// Extract comments from a decor prefix string.
+///
+/// Each returned entry is one logical comment and may span multiple lines (a
+/// `/* … */` block comment). The first line of every comment is left-trimmed;
+/// continuation lines of a block comment keep their indentation *relative to*
+/// the opening `/*`, so the conventional ` * ` star alignment survives when the
+/// block is re-indented by [`push_comment`].
+///
+/// A line-by-line filter (the previous implementation) dropped interior and
+/// closing lines of a multi-line block comment — e.g. `line */` — leaving an
+/// unterminated `/*` and producing unparseable output. This span-based walk
+/// captures the whole block verbatim instead.
 fn extract_comments(prefix: &str) -> Vec<String> {
-    prefix
-        .lines()
-        .filter(|line| {
-            let trimmed = line.trim();
-            trimmed.starts_with('#')
-                || trimmed.starts_with("//")
-                || trimmed.starts_with("/*")
-                || trimmed.starts_with('*')
-                || trimmed.starts_with("*/")
-        })
-        .map(|s| s.to_string())
-        .collect()
+    let mut comments: Vec<String> = Vec::new();
+    let mut lines = prefix.lines();
+
+    while let Some(line) = lines.next() {
+        let trimmed = line.trim_start();
+
+        if trimmed.starts_with('#') || trimmed.starts_with("//") {
+            // Single-line comment.
+            comments.push(line.trim().to_string());
+        } else if trimmed.starts_with("/*") {
+            // Block comment: capture until the line that closes it with `*/`.
+            // Indentation of continuation lines is preserved relative to the
+            // opening `/*` so star alignment is kept on re-emit.
+            let base_indent = leading_ws_len(line);
+            let mut block = trimmed.trim_end().to_string();
+            if !trimmed.contains("*/") {
+                for cont in lines.by_ref() {
+                    block.push('\n');
+                    block.push_str(dedent(cont, base_indent).trim_end());
+                    if cont.contains("*/") {
+                        break;
+                    }
+                }
+            }
+            comments.push(block);
+        }
+        // Anything else (blank lines, the trailing indent-only line) is skipped.
+    }
+
+    comments
+}
+
+/// Number of leading ASCII-whitespace bytes in `line`.
+fn leading_ws_len(line: &str) -> usize {
+    line.len() - line.trim_start().len()
+}
+
+/// Strip up to `n` leading whitespace characters from `line`, preserving any
+/// indentation beyond that (so a block comment's relative star alignment is
+/// retained).
+fn dedent(line: &str, n: usize) -> &str {
+    let prefix_len = line
+        .char_indices()
+        .take(n)
+        .take_while(|&(_, c)| c.is_whitespace())
+        .map(|(i, c)| i + c.len_utf8())
+        .last()
+        .unwrap_or(0);
+    &line[prefix_len..]
+}
+
+/// Append a (possibly multi-line) comment to `prefix`, prepending `indent` to
+/// every line so the whole block sits at the target indentation while keeping
+/// its internal relative alignment. Each comment is followed by a newline.
+fn push_comment(prefix: &mut String, comment: &str, indent: &str) {
+    for line in comment.lines() {
+        if !line.is_empty() {
+            prefix.push_str(indent);
+            prefix.push_str(line);
+        }
+        prefix.push('\n');
+    }
 }
 
 /// Build a prefix for a body structure. The Body/Block encoding adds `\n`
@@ -161,9 +222,7 @@ fn build_body_prefix(want_blank_line: bool, comments: &[String], indent: &str) -
         prefix.push('\n');
     }
     for comment in comments {
-        prefix.push_str(indent);
-        prefix.push_str(comment.trim());
-        prefix.push('\n');
+        push_comment(&mut prefix, comment, indent);
     }
     prefix.push_str(indent);
     prefix
@@ -186,9 +245,7 @@ fn build_object_key_prefix(
         prefix.push('\n');
     }
     for comment in comments {
-        prefix.push_str(indent);
-        prefix.push_str(comment.trim());
-        prefix.push('\n');
+        push_comment(&mut prefix, comment, indent);
     }
     prefix.push_str(indent);
     prefix
@@ -1037,8 +1094,7 @@ pub fn sort_top_level(body: &mut Body, style: FormatStyle) {
                         let comments = extract_comments(&existing);
                         let mut prefix = String::from("\n");
                         for comment in &comments {
-                            prefix.push_str(comment.trim());
-                            prefix.push('\n');
+                            push_comment(&mut prefix, comment, "");
                         }
                         s.decor_mut().set_prefix(prefix);
                     }

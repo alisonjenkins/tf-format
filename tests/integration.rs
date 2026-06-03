@@ -147,6 +147,24 @@ fn fixture_for_expr_value_indent() {
 }
 
 #[test]
+fn fixture_block_comments() {
+    // BUG-1 regression: multi-line `/* ... */` block comments must
+    // survive reordering intact — over a reordered attribute, over a
+    // reordered object key, and a star-aligned block — without being
+    // truncated into unparseable output. Idempotency is asserted by
+    // run_fixture.
+    run_fixture("block_comments");
+}
+
+#[test]
+fn fixture_heredoc_preserved() {
+    // BUG-2 regression: trailing whitespace, tabs, and blank lines
+    // inside heredoc bodies (`<<EOT` / `<<-EOT`) are literal string
+    // content and must NOT be stripped by whitespace post-processing.
+    run_fixture("heredoc_preserved");
+}
+
+#[test]
 fn fixture_opinionated_collapses_blank_groups() {
     // Regression: opinionated mode must IGNORE author blank
     // lines inside a block. All single-line attrs collapse into
