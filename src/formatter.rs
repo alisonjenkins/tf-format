@@ -565,6 +565,87 @@ fn is_heredoc_expr(expr: &Expression) -> bool {
     matches!(expr, Expression::HeredocTemplate(_))
 }
 
+/// Restore the indented-heredoc marker (`<<-`) that hcl-edit drops on parse.
+///
+/// When a `<<-EOT` body contains a line with no leading whitespace, hcl-edit's
+/// `dedent()` computes a strip amount of "nothing" and stores `indent = None`,
+/// which re-encodes as a plain `<<EOT`. The rendered value is identical (there
+/// was nothing to strip), but `terraform fmt` / `tofu fmt` preserve the literal
+/// `<<-` the user wrote, so we restore it for parity (issue #43).
+///
+/// The original marker can't be recovered from the parsed AST alone (a genuine
+/// `<<EOT` is indistinguishable post-parse), so the caller scans the source for
+/// each opener's marker in document order. `markers[i]` is `true` if the i-th
+/// heredoc in source order used `<<-`. This walk visits heredocs in that same
+/// order and sets `indent = Some(0)` on any that lost their `-`.
+pub fn restore_heredoc_indent_markers(body: &mut Body, markers: &[bool]) {
+    let mut idx = 0;
+    restore_heredoc_in_body(body, markers, &mut idx);
+}
+
+fn restore_heredoc_in_body(body: &mut Body, markers: &[bool], idx: &mut usize) {
+    for mut structure in body.iter_mut() {
+        if let Some(mut attr) = structure.as_attribute_mut() {
+            restore_heredoc_in_expr(attr.value_mut(), markers, idx);
+        } else if let Some(block) = structure.as_block_mut() {
+            restore_heredoc_in_body(&mut block.body, markers, idx);
+        }
+    }
+}
+
+fn restore_heredoc_in_expr(expr: &mut Expression, markers: &[bool], idx: &mut usize) {
+    match expr {
+        Expression::HeredocTemplate(heredoc) => {
+            let was_indented = markers.get(*idx).copied().unwrap_or(false);
+            *idx += 1;
+            if was_indented && heredoc.indent().is_none() {
+                heredoc.set_indent(0);
+            }
+            // Do not descend into the heredoc body: the source scan treats a
+            // heredoc body as opaque (skipping to the delimiter), so any nested
+            // opener inside an interpolation is invisible to it. Skipping it
+            // here too keeps the marker indices aligned.
+        }
+        Expression::Object(obj) => {
+            for (_, value) in obj.iter_mut() {
+                restore_heredoc_in_expr(value.expr_mut(), markers, idx);
+            }
+        }
+        Expression::Array(arr) => {
+            for i in 0..arr.len() {
+                if let Some(elem) = arr.get_mut(i) {
+                    restore_heredoc_in_expr(elem, markers, idx);
+                }
+            }
+        }
+        Expression::FuncCall(call) => {
+            for arg in call.args.iter_mut() {
+                restore_heredoc_in_expr(arg, markers, idx);
+            }
+        }
+        Expression::Parenthesis(paren) => restore_heredoc_in_expr(paren.inner_mut(), markers, idx),
+        Expression::Conditional(cond) => {
+            restore_heredoc_in_expr(&mut cond.cond_expr, markers, idx);
+            restore_heredoc_in_expr(&mut cond.true_expr, markers, idx);
+            restore_heredoc_in_expr(&mut cond.false_expr, markers, idx);
+        }
+        Expression::Traversal(trav) => restore_heredoc_in_expr(&mut trav.expr, markers, idx),
+        Expression::ForExpr(for_expr) => {
+            restore_heredoc_in_expr(&mut for_expr.intro.collection_expr, markers, idx);
+            if let Some(key_expr) = &mut for_expr.key_expr {
+                restore_heredoc_in_expr(key_expr, markers, idx);
+            }
+            restore_heredoc_in_expr(&mut for_expr.value_expr, markers, idx);
+        }
+        Expression::UnaryOp(op) => restore_heredoc_in_expr(&mut op.expr, markers, idx),
+        Expression::BinaryOp(op) => {
+            restore_heredoc_in_expr(&mut op.lhs_expr, markers, idx);
+            restore_heredoc_in_expr(&mut op.rhs_expr, markers, idx);
+        }
+        _ => {}
+    }
+}
+
 /// True if an object value spans multiple lines in a way that breaks an `=`
 /// alignment run. A heredoc value spans lines but keeps its `=` on the opening
 /// line, so it does NOT break the run.

@@ -74,7 +74,16 @@ pub fn format_hcl_with(input: &str, opts: &FormatOptions) -> Result<String, Form
         return Ok(String::new());
     }
 
+    // Record each heredoc opener's marker (`<<` vs `<<-`) in source order
+    // *before* parsing: hcl-edit drops the `-` on a `<<-EOT` whose body has a
+    // zero-indent line, and the marker can't be recovered from the AST alone.
+    let heredoc_markers = scan_heredoc_markers(input);
+
     let mut body: Body = input.parse()?;
+
+    // Restore any `<<-` marker hcl-edit dropped, before sorting can reorder the
+    // heredocs out of source order (issue #43).
+    formatter::restore_heredoc_indent_markers(&mut body, &heredoc_markers);
 
     // sort_top_level handles both block ordering and top-level attribute
     // formatting (as in `.tfvars` files), recursing into nested bodies.
@@ -184,4 +193,36 @@ fn heredoc_open_delimiter(line: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+/// Scan `input` for heredoc openers in document order, returning `true` for
+/// each one that used the indented form `<<-` and `false` for plain `<<`.
+///
+/// Heredoc bodies are treated as opaque (we skip to the closing delimiter), so
+/// a `<<` appearing inside a heredoc body is not mistaken for a new opener.
+/// The resulting order matches a depth-first walk of the parsed AST, which is
+/// how [`formatter::restore_heredoc_indent_markers`] pairs the two.
+fn scan_heredoc_markers(input: &str) -> Vec<bool> {
+    let mut markers = Vec::new();
+    let mut heredoc_delim: Option<String> = None;
+
+    for line in input.lines() {
+        match &heredoc_delim {
+            Some(delim) => {
+                if line.trim() == delim.as_str() {
+                    heredoc_delim = None;
+                }
+            }
+            None => {
+                if let Some(delim) = heredoc_open_delimiter(line) {
+                    if let Some(idx) = line.find("<<") {
+                        markers.push(line[idx + 2..].starts_with('-'));
+                    }
+                    heredoc_delim = Some(delim);
+                }
+            }
+        }
+    }
+
+    markers
 }
