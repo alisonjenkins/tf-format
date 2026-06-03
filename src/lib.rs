@@ -80,7 +80,7 @@ pub fn format_hcl_with(input: &str, opts: &FormatOptions) -> Result<String, Form
     // formatting (as in `.tfvars` files), recursing into nested bodies.
     formatter::sort_top_level(&mut body, opts.style);
 
-    Ok(post_process(&body.to_string()))
+    Ok(post_process(&body.to_string(), opts.style))
 }
 
 /// Post-process the formatted output: strip trailing whitespace from each line
@@ -90,40 +90,62 @@ pub fn format_hcl_with(input: &str, opts: &FormatOptions) -> Result<String, Form
 /// data, so their trailing whitespace must be preserved — trimming it would
 /// silently alter the rendered Terraform value. We track heredoc spans while
 /// walking the rendered text and skip trimming inside them.
-fn post_process(output: &str) -> String {
-    let mut result = String::with_capacity(output.len());
+fn post_process(output: &str, style: FormatStyle) -> String {
+    // Opinionated mode drops any blank line immediately preceding a closing
+    // `}` / `]` (issue #35). `terraform fmt` / `tofu fmt` preserve those blanks,
+    // so minimal mode leaves them alone. Array-interior blanks are already
+    // removed at the AST level; this catches the block-body case (the blank
+    // sits in a decor suffix whose owner varies by structure type) and acts as
+    // a backstop for arrays.
+    let strip_before_close = matches!(style, FormatStyle::Opinionated);
+
+    let mut lines_out: Vec<String> = Vec::new();
     let mut heredoc_delim: Option<String> = None;
-    let mut first = true;
+    // Blank lines seen outside a heredoc, held back until we know whether the
+    // next non-blank line is a closing bracket (in which case they're dropped).
+    let mut pending_blanks: Vec<String> = Vec::new();
 
     for line in output.lines() {
-        if !first {
-            result.push('\n');
-        }
-        first = false;
-
         match &heredoc_delim {
             // Inside a heredoc body: emit lines verbatim. The terminator line
             // (whose trimmed content equals the delimiter) closes the heredoc;
             // it is emitted verbatim too, since its indentation is significant
             // for the `<<-` form.
             Some(delim) => {
-                result.push_str(line);
+                lines_out.append(&mut pending_blanks);
+                lines_out.push(line.to_string());
                 if line.trim() == delim.as_str() {
                     heredoc_delim = None;
                 }
             }
-            // Outside a heredoc: strip trailing whitespace as before, then
-            // check whether this line opens a heredoc.
+            // Outside a heredoc: strip trailing whitespace, then check whether
+            // this line opens a heredoc.
             None => {
-                result.push_str(line.trim_end());
-                heredoc_delim = heredoc_open_delimiter(line);
+                let trimmed = line.trim_end();
+                if trimmed.is_empty() {
+                    pending_blanks.push(String::new());
+                } else {
+                    let starts_close = {
+                        let t = trimmed.trim_start();
+                        t.starts_with('}') || t.starts_with(']')
+                    };
+                    if strip_before_close && starts_close {
+                        pending_blanks.clear();
+                    } else {
+                        lines_out.append(&mut pending_blanks);
+                    }
+                    lines_out.push(trimmed.to_string());
+                    heredoc_delim = heredoc_open_delimiter(line);
+                }
             }
         }
     }
+    lines_out.append(&mut pending_blanks);
 
     // Collapse any trailing blank lines so the file ends with exactly one
     // newline (Rule #8). A trailing blank line can never be inside a heredoc
     // (the heredoc is already closed by end of file), so this is safe.
+    let mut result = lines_out.join("\n");
     let trimmed_len = result.trim_end_matches('\n').len();
     result.truncate(trimmed_len);
     result.push('\n');

@@ -1,5 +1,7 @@
 use hcl_edit::Decorate;
-use hcl_edit::expr::{Expression, Object, ObjectKey, ObjectValueAssignment, ObjectValueTerminator};
+use hcl_edit::expr::{
+    Array, Expression, Object, ObjectKey, ObjectValueAssignment, ObjectValueTerminator,
+};
 use hcl_edit::structure::{Body, Structure};
 
 use crate::classify::is_multiline;
@@ -144,6 +146,24 @@ fn has_blank_line_after_other_terminator(prefix: &str) -> bool {
     prefix.contains("\n\n")
 }
 
+/// Count the leading newlines a decor prefix encodes, treating whitespace-only
+/// lines as blank. Stops at the first non-whitespace character (e.g. a comment
+/// `#` or the structure's own indent has no following content in a prefix).
+///
+/// Used by the minimal (`tofu fmt` parity) paths to reproduce the *exact*
+/// number of blank lines a user wrote, rather than collapsing runs to one.
+fn count_leading_newlines(prefix: &str) -> usize {
+    let mut count = 0;
+    for ch in prefix.chars() {
+        match ch {
+            '\n' => count += 1,
+            ' ' | '\t' | '\r' => continue,
+            _ => break,
+        }
+    }
+    count
+}
+
 /// Extract comments from a decor prefix string.
 ///
 /// Each returned entry is one logical comment and may span multiple lines (a
@@ -224,9 +244,9 @@ fn push_comment(prefix: &mut String, comment: &str, indent: &str) {
 /// Build a prefix for a body structure. The Body/Block encoding adds `\n`
 /// between structures, so the prefix only needs indent (and optionally an
 /// extra `\n` for a blank line separator).
-fn build_body_prefix(want_blank_line: bool, comments: &[String], indent: &str) -> String {
+fn build_body_prefix(blank_lines: usize, comments: &[String], indent: &str) -> String {
     let mut prefix = String::new();
-    if want_blank_line {
+    for _ in 0..blank_lines {
         prefix.push('\n');
     }
     for comment in comments {
@@ -240,16 +260,16 @@ fn build_body_prefix(want_blank_line: bool, comments: &[String], indent: &str) -
 /// entry's ObjectValueTerminator::Newline, except for the first entry where
 /// we need a `\n` after the opening `{`.
 fn build_object_key_prefix(
-    is_first: bool,
-    want_blank_line: bool,
+    add_structural_newline: bool,
+    blank_lines: usize,
     comments: &[String],
     indent: &str,
 ) -> String {
     let mut prefix = String::new();
-    if is_first {
+    if add_structural_newline {
         prefix.push('\n');
     }
-    if want_blank_line {
+    for _ in 0..blank_lines {
         prefix.push('\n');
     }
     for comment in comments {
@@ -259,13 +279,41 @@ fn build_object_key_prefix(
     prefix
 }
 
-/// Adjust the prefix decoration on a body structure.
-fn adjust_structure_prefix(structure: &mut Structure, want_blank_line: bool, indent: &str) {
+/// Number of blank lines to emit before an object entry.
+///
+/// Opinionated mode follows the group-driven `want_blank` decision (0 or 1).
+/// Minimal mode mirrors `tofu fmt`: reproduce the *exact* number of blank lines
+/// the user wrote, recovered from the entry's original prefix. `add_structural`
+/// indicates whether the prefix builder will emit the structural newline (the
+/// `\n` after `{`, or the line-break following a comma-terminated entry) — that
+/// newline is not itself a blank line, so it is excluded from the count.
+fn object_entry_blank_lines(
+    style: FormatStyle,
+    key: &ObjectKey,
+    add_structural: bool,
+    want_blank: bool,
+) -> usize {
+    if style.is_opinionated() {
+        return want_blank as usize;
+    }
+    let prefix = key.decor().prefix().map(|p| p.to_string()).unwrap_or_default();
+    let leading = count_leading_newlines(&prefix);
+    let blanks = if add_structural {
+        leading.saturating_sub(1)
+    } else {
+        leading
+    };
+    if blanks == 0 && want_blank { 1 } else { blanks }
+}
+
+/// Adjust the prefix decoration on a body structure, emitting `blank_lines`
+/// blank lines before it.
+fn adjust_structure_prefix(structure: &mut Structure, blank_lines: usize, indent: &str) {
     let decor = structure.decor_mut();
     let existing_prefix = decor.prefix().map(|p| p.to_string()).unwrap_or_default();
 
     let comments = extract_comments(&existing_prefix);
-    let new_prefix = build_body_prefix(want_blank_line, &comments, indent);
+    let new_prefix = build_body_prefix(blank_lines, &comments, indent);
     decor.set_prefix(new_prefix);
 }
 
@@ -396,14 +444,14 @@ fn format_structure_group(
 
     for (i, mut s) in priority_single.into_iter().enumerate() {
         let want_blank = if i == 0 { want_group_blank } else { false };
-        adjust_structure_prefix(&mut s, want_blank, indent);
+        adjust_structure_prefix(&mut s, want_blank as usize, indent);
         body.push(s);
         any_emitted = true;
     }
 
     for (i, mut s) in priority_multi.into_iter().enumerate() {
         let want_blank = i > 0 || has_priority_single || (i == 0 && want_group_blank);
-        adjust_structure_prefix(&mut s, want_blank, indent);
+        adjust_structure_prefix(&mut s, want_blank as usize, indent);
         body.push(s);
         any_emitted = true;
     }
@@ -412,14 +460,14 @@ fn format_structure_group(
 
     for (i, mut s) in normal_single.into_iter().enumerate() {
         let want_blank = i == 0 && (has_priority || want_group_blank);
-        adjust_structure_prefix(&mut s, want_blank, indent);
+        adjust_structure_prefix(&mut s, want_blank as usize, indent);
         body.push(s);
         any_emitted = true;
     }
 
     for (i, mut s) in normal_multi.into_iter().enumerate() {
         let want_blank = i > 0 || has_normal_single || has_priority || (i == 0 && want_group_blank);
-        adjust_structure_prefix(&mut s, want_blank, indent);
+        adjust_structure_prefix(&mut s, want_blank as usize, indent);
         body.push(s);
         any_emitted = true;
     }
@@ -442,8 +490,18 @@ fn format_structure_group_minimal(
 
     let mut any_emitted = any_emitted_before;
     for (i, mut s) in group.into_iter().enumerate() {
-        let want_blank = i == 0 && want_group_blank;
-        adjust_structure_prefix(&mut s, want_blank, indent);
+        // Minimal mode mirrors `tofu fmt`: preserve the exact number of blank
+        // lines the user wrote. A body structure encodes each blank line as a
+        // leading `\n` in its prefix (the Body adds the line-break between
+        // structures itself). `want_group_blank` carries the blank that caused
+        // this group to split off from the previous one, but only for the very
+        // first body group boundary where the count would otherwise be lost.
+        let existing_prefix = s.decor().prefix().map(|p| p.to_string()).unwrap_or_default();
+        let mut blank_lines = count_leading_newlines(&existing_prefix);
+        if i == 0 && want_group_blank && blank_lines == 0 {
+            blank_lines = 1;
+        }
+        adjust_structure_prefix(&mut s, blank_lines, indent);
         body.push(s);
         any_emitted = true;
     }
@@ -532,6 +590,57 @@ fn split_body_groups(structures: Vec<Structure>) -> Vec<Vec<Structure>> {
     groups
 }
 
+/// Opinionated: remove every blank line from a multi-line array — both between
+/// elements and immediately before the closing `]` (issue #35). Each element's
+/// prefix is rebuilt as a single newline + indent (comments preserved), and the
+/// array's trailing whitespace is collapsed so `]` sits on its own line with no
+/// preceding blank line. `terraform fmt` / `tofu fmt` preserve these blanks, so
+/// this never runs under [`FormatStyle::Minimal`].
+fn normalize_array_blank_lines(arr: &mut Array, depth: usize) {
+    let inner_indent = "  ".repeat(depth + 1);
+    let closing_indent = "  ".repeat(depth);
+
+    for i in 0..arr.len() {
+        if let Some(elem) = arr.get_mut(i) {
+            let prefix = elem
+                .decor()
+                .prefix()
+                .map(|p| p.to_string())
+                .unwrap_or_default();
+            // Only rewrite elements that start their own line; leave the rare
+            // inline element untouched.
+            if prefix.contains('\n') {
+                let comments = extract_comments(&prefix);
+                let mut new_prefix = String::from("\n");
+                for comment in &comments {
+                    push_comment(&mut new_prefix, comment, &inner_indent);
+                }
+                new_prefix.push_str(&inner_indent);
+                elem.decor_mut().set_prefix(new_prefix);
+            }
+            // A whitespace-only suffix can carry stray blank lines before the
+            // next comma; drop it. Suffixes holding comments are preserved.
+            let suffix = elem
+                .decor()
+                .suffix()
+                .map(|s| s.to_string())
+                .unwrap_or_default();
+            if suffix.contains('\n') && extract_comments(&suffix).is_empty() {
+                elem.decor_mut().set_suffix("");
+            }
+        }
+    }
+
+    let trailing = arr.trailing().to_string();
+    let comments = extract_comments(&trailing);
+    let mut new_trailing = String::from("\n");
+    for comment in &comments {
+        push_comment(&mut new_trailing, comment, &inner_indent);
+    }
+    new_trailing.push_str(&closing_indent);
+    arr.set_trailing(new_trailing);
+}
+
 /// Recursively format an expression in-place. Sorts object keys and recurses
 /// into nested objects, arrays, function call arguments, and other compound
 /// expressions.
@@ -577,6 +686,7 @@ fn format_expression(expr: &mut Expression, depth: usize, style: FormatStyle, pr
                     }
                 }
                 arr.set_trailing_comma(true);
+                normalize_array_blank_lines(arr, depth);
             }
             for i in 0..arr.len() {
                 if let Some(elem) = arr.get_mut(i) {
@@ -819,6 +929,10 @@ fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
 
     // Drain all entries
     let old_obj = std::mem::take(obj);
+    // Capture the original trailing (whitespace between the last entry and the
+    // closing `}`) before consuming the object — minimal mode preserves any
+    // blank lines it holds, matching `tofu fmt`.
+    let old_trailing = old_obj.trailing().to_string();
     let mut entries: Vec<(ObjectKey, hcl_edit::expr::ObjectValue)> = old_obj.into_iter().collect();
 
     // Decide the canonical terminator before sorting can shuffle a no-comma
@@ -901,14 +1015,15 @@ fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
         for (mut key, mut value) in single {
             let needs_leading_newline =
                 !is_first && !matches!(last_terminator, ObjectValueTerminator::Newline);
-            let want_blank = need_group_blank && !group_blank_emitted;
-            let comments = extract_key_comments(&key);
-            let prefix = build_object_key_prefix(
-                is_first || needs_leading_newline,
-                want_blank,
-                &comments,
-                &indent,
+            let add_structural = is_first || needs_leading_newline;
+            let blank_lines = object_entry_blank_lines(
+                style,
+                &key,
+                add_structural,
+                need_group_blank && !group_blank_emitted,
             );
+            let comments = extract_key_comments(&key);
+            let prefix = build_object_key_prefix(add_structural, blank_lines, &comments, &indent);
             key.decor_mut().set_prefix(prefix);
             normalize_terminator(&mut value, style, use_commas);
             last_terminator = value.terminator();
@@ -918,8 +1033,9 @@ fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
         }
         for (i, (mut key, mut value)) in multi.into_iter().enumerate() {
             let want_blank = (i > 0 || has_single) || (need_group_blank && !group_blank_emitted);
+            let blank_lines = object_entry_blank_lines(style, &key, is_first, want_blank);
             let comments = extract_key_comments(&key);
-            let prefix = build_object_key_prefix(is_first, want_blank, &comments, &indent);
+            let prefix = build_object_key_prefix(is_first, blank_lines, &comments, &indent);
             key.decor_mut().set_prefix(prefix);
             normalize_terminator(&mut value, style, use_commas);
             last_terminator = value.terminator();
@@ -936,9 +1052,20 @@ fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
     // last value.
     *obj.decor_mut() = obj_decor;
     let closing_indent = "  ".repeat(depth);
-    let trailing = match last_terminator {
-        ObjectValueTerminator::Newline => closing_indent,
-        _ => format!("\n{closing_indent}"),
+    let trailing = if style.is_opinionated() {
+        // Opinionated: drop any blank lines before `}`; keep just the newline
+        // (added here when the last terminator didn't already supply one).
+        match last_terminator {
+            ObjectValueTerminator::Newline => closing_indent,
+            _ => format!("\n{closing_indent}"),
+        }
+    } else {
+        // Minimal (`tofu fmt` parity): preserve the original blank lines before
+        // `}`, re-indenting only the final line that the `}` sits on.
+        match old_trailing.rfind('\n') {
+            Some(idx) => format!("{}{closing_indent}", &old_trailing[..=idx]),
+            None => closing_indent,
+        }
     };
     obj.set_trailing(trailing);
 }
