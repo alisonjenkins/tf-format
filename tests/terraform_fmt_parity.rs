@@ -54,8 +54,20 @@ fn tofu_available() -> bool {
         .unwrap_or(false)
 }
 
+/// When `TF_FORMAT_REQUIRE_TOFU` is set (e.g. in CI), a missing `tofu`
+/// binary turns the parity SKIP into a hard failure, so the single source of
+/// truth for real-formatter parity can't silently become a green no-op.
+fn require_tofu() -> bool {
+    std::env::var_os("TF_FORMAT_REQUIRE_TOFU").is_some()
+}
+
 fn check_parity(name: &str, input: &str) {
     if !tofu_available() {
+        assert!(
+            !require_tofu(),
+            "{name}: tofu is not on PATH but TF_FORMAT_REQUIRE_TOFU is set — \
+             parity cannot be silently skipped"
+        );
         eprintln!("SKIP {name}: tofu not on PATH");
         return;
     }
@@ -89,6 +101,11 @@ fn check_parity(name: &str, input: &str) {
 /// separators, which the opinionated path rewrites to `=`).
 fn check_parity_minimal(name: &str, input: &str) {
     if !tofu_available() {
+        assert!(
+            !require_tofu(),
+            "{name}: tofu is not on PATH but TF_FORMAT_REQUIRE_TOFU is set — \
+             parity cannot be silently skipped"
+        );
         eprintln!("SKIP {name}: tofu not on PATH");
         return;
     }
@@ -385,4 +402,39 @@ fn parity_object_mixed_colon_and_equals() {
 }
 "#;
     check_parity_minimal("object_mixed_colon_and_equals", input);
+}
+
+/// Sweep every minimal-mode fixture's `input.tf` through real `tofu fmt`
+/// so the minimal style is validated against the actual formatter, not only
+/// against hand-written `expected.tf` files. Catches any minimal-mode
+/// divergence the static fixtures might mask.
+#[test]
+fn parity_all_minimal_fixtures() {
+    let dir = std::path::Path::new("tests/fixtures-minimal");
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(e) => panic!("failed to read {}: {e}", dir.display()),
+    };
+
+    for entry in entries {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(e) => panic!("failed to read dir entry: {e}"),
+        };
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let input_path = path.join("input.tf");
+        let input = match std::fs::read_to_string(&input_path) {
+            Ok(s) => s,
+            Err(e) => panic!("failed to read {}: {e}", input_path.display()),
+        };
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("<unknown>")
+            .to_string();
+        check_parity_minimal(&name, &input);
+    }
 }

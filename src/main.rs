@@ -85,6 +85,23 @@ fn run(cli: &Cli) -> Result<(), CliError> {
 
         let output = tf_format::format_hcl_with(&input, &opts)?;
 
+        // In --check / --diff mode, stdin must not blindly emit the formatted
+        // body (that would give an editor/CI integration a false OK). Report
+        // whether the input was already formatted instead.
+        if cli.check {
+            if input == output {
+                return Ok(());
+            }
+            return Err(CliError::CheckFailed { count: 1 });
+        }
+
+        if cli.diff {
+            if input != output {
+                print_diff(Path::new("<stdin>"), &input, &output);
+            }
+            return Ok(());
+        }
+
         io::stdout()
             .write_all(output.as_bytes())
             .map_err(CliError::WriteStdout)?;
@@ -100,18 +117,34 @@ fn run(cli: &Cli) -> Result<(), CliError> {
     }
 
     let mut needs_formatting = Vec::new();
+    let mut failed = 0usize;
 
+    // Process every file even if some fail: a single unparseable or
+    // unreadable file must not abort the batch and leave the codebase
+    // half-formatted. Errors are reported as they occur; we exit
+    // non-zero at the end if any file failed.
     for path in &paths {
-        let changed = process_file(path, cli.check, cli.diff, &opts)?;
-        if changed {
-            needs_formatting.push(path.clone());
+        match process_file(path, cli.check, cli.diff, &opts) {
+            Ok(true) => needs_formatting.push(path.clone()),
+            Ok(false) => {}
+            Err(e) => {
+                eprintln!("Error: {e}");
+                failed += 1;
+            }
         }
     }
 
-    if cli.check && !needs_formatting.is_empty() {
+    if cli.check {
         for path in &needs_formatting {
             eprintln!("{}", path.display());
         }
+    }
+
+    if failed > 0 {
+        return Err(CliError::ProcessFailed { count: failed });
+    }
+
+    if cli.check && !needs_formatting.is_empty() {
         return Err(CliError::CheckFailed {
             count: needs_formatting.len(),
         });
@@ -150,7 +183,7 @@ fn process_file(
         return Ok(true);
     }
 
-    std::fs::write(path, &output).map_err(|source| ProcessFileError::WriteFile {
+    write_atomically(path, &output).map_err(|source| ProcessFileError::WriteFile {
         path: path.to_path_buf(),
         source,
     })?;
@@ -158,18 +191,38 @@ fn process_file(
     Ok(true)
 }
 
+/// Write `contents` to `path` atomically: write to a temp file in the same
+/// directory, flush it, then rename it over the original. A crash mid-write
+/// can never leave a `.tf` file truncated or empty — the rename either
+/// completes or it doesn't. The original file's permissions are preserved.
+fn write_atomically(path: &Path, contents: &str) -> io::Result<()> {
+    let dir = match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    };
+
+    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+    tmp.write_all(contents.as_bytes())?;
+    tmp.flush()?;
+
+    // Preserve the original file's permissions on the replacement.
+    if let Ok(meta) = std::fs::metadata(path) {
+        let _ = tmp.as_file().set_permissions(meta.permissions());
+    }
+
+    // Same directory => same filesystem => the rename is atomic.
+    tmp.persist(path).map_err(|e| e.error)?;
+    Ok(())
+}
+
 fn print_diff(path: &Path, original: &str, formatted: &str) {
     let path_str = path.display().to_string();
-    println!("--- {path_str}");
-    println!("+++ {path_str}");
-
-    for (i, (orig_line, fmt_line)) in original.lines().zip(formatted.lines()).enumerate() {
-        if orig_line != fmt_line {
-            println!("@@ -{line} +{line} @@", line = i + 1);
-            println!("-{orig_line}");
-            println!("+{fmt_line}");
-        }
-    }
+    // A real unified diff: the previous hand-rolled version zipped the two line
+    // iterators, so net insertions/deletions (changed line counts) were
+    // dropped or shown as bogus pairs. similar produces correct hunks with
+    // context, insertions, and deletions.
+    let diff = similar::TextDiff::from_lines(original, formatted);
+    print!("{}", diff.unified_diff().header(&path_str, &path_str));
 }
 
 fn discover_files(inputs: &[String]) -> Result<Vec<PathBuf>, DiscoverFilesError> {
@@ -182,8 +235,8 @@ fn discover_files(inputs: &[String]) -> Result<Vec<PathBuf>, DiscoverFilesError>
             collect_tf_files_recursive(input_path, &mut paths)?;
         } else if input_path.is_file() {
             paths.push(input_path.to_path_buf());
-        } else {
-            // Treat as glob pattern
+        } else if has_glob_metacharacters(input) {
+            // Treat as glob pattern.
             let entries = glob::glob(input).map_err(|source| DiscoverFilesError::GlobPattern {
                 pattern: input.clone(),
                 source,
@@ -195,10 +248,41 @@ fn discover_files(inputs: &[String]) -> Result<Vec<PathBuf>, DiscoverFilesError>
                     paths.push(path);
                 }
             }
+        } else {
+            // A literal path (no glob metacharacters) that is neither a file
+            // nor a directory does not exist. Fail loudly so a typo'd or
+            // deleted path doesn't silently pass `--check` in CI.
+            return Err(DiscoverFilesError::PathNotFound {
+                path: input_path.to_path_buf(),
+            });
         }
     }
 
-    Ok(paths)
+    Ok(dedup_paths(paths))
+}
+
+/// True if `input` contains any glob metacharacter, so it should be expanded
+/// as a pattern rather than treated as a literal path.
+fn has_glob_metacharacters(input: &str) -> bool {
+    input.contains(['*', '?', '[', ']'])
+}
+
+/// Canonicalize and deduplicate discovered paths, preserving first-seen order.
+/// A file reachable via several inputs (a duplicate argument, or a directory
+/// plus an overlapping glob) is processed once. Canonicalization failures fall
+/// back to the raw path so unreadable entries still surface downstream.
+fn dedup_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut seen = std::collections::HashSet::new();
+    let mut deduped = Vec::with_capacity(paths.len());
+
+    for path in paths {
+        let key = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+        if seen.insert(key) {
+            deduped.push(path);
+        }
+    }
+
+    deduped
 }
 
 fn collect_tf_files_recursive(
@@ -215,11 +299,34 @@ fn collect_tf_files_recursive(
             path: dir.to_path_buf(),
             source,
         })?;
+
+        // Use the entry's own file type (does NOT follow symlinks) so a symlink
+        // pointing at an ancestor can't send us into an infinite/redundant
+        // traversal. Symlinks are skipped entirely.
+        let file_type = entry
+            .file_type()
+            .map_err(|source| DiscoverFilesError::ReadDir {
+                path: dir.to_path_buf(),
+                source,
+            })?;
+        if file_type.is_symlink() {
+            continue;
+        }
+
         let path = entry.path();
 
-        if path.is_dir() {
+        if file_type.is_dir() {
+            // Skip dot-directories (e.g. `.terraform`, `.git`), matching
+            // `terraform fmt`, so vendored/cached modules aren't reformatted.
+            if entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with('.'))
+            {
+                continue;
+            }
             collect_tf_files_recursive(&path, paths)?;
-        } else if path.is_file()
+        } else if file_type.is_file()
             && let Some(ext) = path.extension().and_then(|e| e.to_str())
             && TF_EXTENSIONS.contains(&ext)
         {

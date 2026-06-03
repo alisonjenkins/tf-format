@@ -42,11 +42,19 @@ impl FormatStyle {
 fn priorities_for_block(ident: &str) -> (&'static [&'static str], &'static [&'static str]) {
     match ident {
         // resource / data / ephemeral / action share the same meta-args.
-        "resource" | "data" | "ephemeral" | "action" => {
-            (&["count", "for_each", "provider", "depends_on"], &["lifecycle"])
-        }
+        "resource" | "data" | "ephemeral" | "action" => (
+            &["count", "for_each", "provider", "depends_on"],
+            &["lifecycle"],
+        ),
         "module" => (
-            &["source", "version", "providers", "count", "for_each", "depends_on"],
+            &[
+                "source",
+                "version",
+                "providers",
+                "count",
+                "for_each",
+                "depends_on",
+            ],
             &["lifecycle"],
         ),
         "import" => (&["for_each", "provider"], &[]),
@@ -136,20 +144,81 @@ fn has_blank_line_after_other_terminator(prefix: &str) -> bool {
     prefix.contains("\n\n")
 }
 
-/// Extract comment lines from a decor prefix string.
+/// Extract comments from a decor prefix string.
+///
+/// Each returned entry is one logical comment and may span multiple lines (a
+/// `/* … */` block comment). The first line of every comment is left-trimmed;
+/// continuation lines of a block comment keep their indentation *relative to*
+/// the opening `/*`, so the conventional ` * ` star alignment survives when the
+/// block is re-indented by [`push_comment`].
+///
+/// A line-by-line filter (the previous implementation) dropped interior and
+/// closing lines of a multi-line block comment — e.g. `line */` — leaving an
+/// unterminated `/*` and producing unparseable output. This span-based walk
+/// captures the whole block verbatim instead.
 fn extract_comments(prefix: &str) -> Vec<String> {
-    prefix
-        .lines()
-        .filter(|line| {
-            let trimmed = line.trim();
-            trimmed.starts_with('#')
-                || trimmed.starts_with("//")
-                || trimmed.starts_with("/*")
-                || trimmed.starts_with('*')
-                || trimmed.starts_with("*/")
-        })
-        .map(|s| s.to_string())
-        .collect()
+    let mut comments: Vec<String> = Vec::new();
+    let mut lines = prefix.lines();
+
+    while let Some(line) = lines.next() {
+        let trimmed = line.trim_start();
+
+        if trimmed.starts_with('#') || trimmed.starts_with("//") {
+            // Single-line comment.
+            comments.push(line.trim().to_string());
+        } else if trimmed.starts_with("/*") {
+            // Block comment: capture until the line that closes it with `*/`.
+            // Indentation of continuation lines is preserved relative to the
+            // opening `/*` so star alignment is kept on re-emit.
+            let base_indent = leading_ws_len(line);
+            let mut block = trimmed.trim_end().to_string();
+            if !trimmed.contains("*/") {
+                for cont in lines.by_ref() {
+                    block.push('\n');
+                    block.push_str(dedent(cont, base_indent).trim_end());
+                    if cont.contains("*/") {
+                        break;
+                    }
+                }
+            }
+            comments.push(block);
+        }
+        // Anything else (blank lines, the trailing indent-only line) is skipped.
+    }
+
+    comments
+}
+
+/// Number of leading ASCII-whitespace bytes in `line`.
+fn leading_ws_len(line: &str) -> usize {
+    line.len() - line.trim_start().len()
+}
+
+/// Strip up to `n` leading whitespace characters from `line`, preserving any
+/// indentation beyond that (so a block comment's relative star alignment is
+/// retained).
+fn dedent(line: &str, n: usize) -> &str {
+    let prefix_len = line
+        .char_indices()
+        .take(n)
+        .take_while(|&(_, c)| c.is_whitespace())
+        .map(|(i, c)| i + c.len_utf8())
+        .last()
+        .unwrap_or(0);
+    &line[prefix_len..]
+}
+
+/// Append a (possibly multi-line) comment to `prefix`, prepending `indent` to
+/// every line so the whole block sits at the target indentation while keeping
+/// its internal relative alignment. Each comment is followed by a newline.
+fn push_comment(prefix: &mut String, comment: &str, indent: &str) {
+    for line in comment.lines() {
+        if !line.is_empty() {
+            prefix.push_str(indent);
+            prefix.push_str(line);
+        }
+        prefix.push('\n');
+    }
 }
 
 /// Build a prefix for a body structure. The Body/Block encoding adds `\n`
@@ -161,9 +230,7 @@ fn build_body_prefix(want_blank_line: bool, comments: &[String], indent: &str) -
         prefix.push('\n');
     }
     for comment in comments {
-        prefix.push_str(indent);
-        prefix.push_str(comment.trim());
-        prefix.push('\n');
+        push_comment(&mut prefix, comment, indent);
     }
     prefix.push_str(indent);
     prefix
@@ -186,9 +253,7 @@ fn build_object_key_prefix(
         prefix.push('\n');
     }
     for comment in comments {
-        prefix.push_str(indent);
-        prefix.push_str(comment.trim());
-        prefix.push('\n');
+        push_comment(&mut prefix, comment, indent);
     }
     prefix.push_str(indent);
     prefix
@@ -214,12 +279,7 @@ fn adjust_structure_prefix(structure: &mut Structure, want_blank_line: bool, ind
 ///
 /// Under [`FormatStyle::Minimal`] the partitioning + sorting is
 /// suppressed; only `=` alignment within blank-line groups runs.
-pub fn format_body(
-    body: &mut Body,
-    depth: usize,
-    parent_ident: Option<&str>,
-    style: FormatStyle,
-) {
+pub fn format_body(body: &mut Body, depth: usize, parent_ident: Option<&str>, style: FormatStyle) {
     let indent = "  ".repeat(depth + 1);
 
     // Preserve body-level metadata
@@ -239,7 +299,8 @@ pub fn format_body(
                 format_body(&mut block.body, depth + 1, None, style);
             }
             Structure::Attribute(attr) => {
-                format_expression(&mut attr.value, depth + 1, style);
+                let prefix_width = attr.key.as_str().len() + 3; // `key = `
+                format_expression(&mut attr.value, depth + 1, style, prefix_width);
             }
         }
     }
@@ -463,7 +524,13 @@ fn split_body_groups(structures: Vec<Structure>) -> Vec<Vec<Structure>> {
 /// Under [`FormatStyle::Minimal`] the object-key sort and the
 /// single-line-object expansion are skipped, and trailing-comma
 /// insertion on multi-line arrays is suppressed.
-fn format_expression(expr: &mut Expression, depth: usize, style: FormatStyle) {
+/// Recursively format an expression in-place. `prefix_width` is the width of
+/// any text that precedes the expression on its own line (e.g. `key = ` for an
+/// attribute or object value), so the single-line-object expansion check can
+/// measure the *whole* line rather than just the object literal. It is 0 for
+/// sub-expressions that don't start a line (array elements, call arguments,
+/// operands).
+fn format_expression(expr: &mut Expression, depth: usize, style: FormatStyle, prefix_width: usize) {
     match expr {
         Expression::Object(obj) => {
             // Format multi-line objects, and also expand any single-line object
@@ -471,8 +538,8 @@ fn format_expression(expr: &mut Expression, depth: usize, style: FormatStyle) {
             // emit huge unreadable one-liners. The expansion is opinionated
             // — it changes the source layout — so we skip it under
             // FormatStyle::Minimal.
-            let should_expand =
-                style.is_opinionated() && should_expand_single_line_object(obj, depth);
+            let should_expand = style.is_opinionated()
+                && should_expand_single_line_object(obj, depth, prefix_width);
             if is_multiline_object(obj) || should_expand {
                 format_object(obj, depth, style);
             }
@@ -503,7 +570,7 @@ fn format_expression(expr: &mut Expression, depth: usize, style: FormatStyle) {
                         .prefix()
                         .is_none_or(|p| !p.to_string().contains('\n'));
                     let elem_depth = if elem_inline { depth } else { depth + 1 };
-                    format_expression(elem, elem_depth, style);
+                    format_expression(elem, elem_depth, style, 0);
                 }
             }
         }
@@ -522,19 +589,19 @@ fn format_expression(expr: &mut Expression, depth: usize, style: FormatStyle) {
                     .prefix()
                     .is_none_or(|p| !p.to_string().contains('\n'));
                 let arg_depth = if arg_inline { depth } else { depth + 1 };
-                format_expression(arg, arg_depth, style);
+                format_expression(arg, arg_depth, style, 0);
             }
         }
         Expression::Parenthesis(paren) => {
-            format_expression(paren.inner_mut(), depth, style);
+            format_expression(paren.inner_mut(), depth, style, 0);
         }
         Expression::Conditional(cond) => {
-            format_expression(&mut cond.cond_expr, depth, style);
-            format_expression(&mut cond.true_expr, depth, style);
-            format_expression(&mut cond.false_expr, depth, style);
+            format_expression(&mut cond.cond_expr, depth, style, 0);
+            format_expression(&mut cond.true_expr, depth, style, 0);
+            format_expression(&mut cond.false_expr, depth, style, 0);
         }
         Expression::Traversal(trav) => {
-            format_expression(&mut trav.expr, depth, style);
+            format_expression(&mut trav.expr, depth, style, 0);
         }
         Expression::ForExpr(for_expr) => {
             // The for-expression's `for ... in C : K => V` line lives
@@ -545,18 +612,18 @@ fn format_expression(expr: &mut Expression, depth: usize, style: FormatStyle) {
             // keys/elements line up at the right column. Without the
             // bump, an inner `{ name = ..., type = ... }` lands at
             // the same indent as the for-line itself.
-            format_expression(&mut for_expr.intro.collection_expr, depth + 1, style);
+            format_expression(&mut for_expr.intro.collection_expr, depth + 1, style, 0);
             if let Some(key_expr) = &mut for_expr.key_expr {
-                format_expression(key_expr, depth + 1, style);
+                format_expression(key_expr, depth + 1, style, 0);
             }
-            format_expression(&mut for_expr.value_expr, depth + 1, style);
+            format_expression(&mut for_expr.value_expr, depth + 1, style, 0);
         }
         Expression::UnaryOp(op) => {
-            format_expression(&mut op.expr, depth, style);
+            format_expression(&mut op.expr, depth, style, 0);
         }
         Expression::BinaryOp(op) => {
-            format_expression(&mut op.lhs_expr, depth, style);
-            format_expression(&mut op.rhs_expr, depth, style);
+            format_expression(&mut op.lhs_expr, depth, style, 0);
+            format_expression(&mut op.rhs_expr, depth, style, 0);
         }
         // Leaf expressions (Null, Bool, Number, String, Variable, etc.)
         _ => {}
@@ -693,10 +760,10 @@ fn is_multiline_array(arr: &hcl_edit::expr::Array) -> bool {
 const MAX_LINE_WIDTH: usize = 80;
 
 /// Decide whether a currently single-line object should be expanded onto
-/// multiple lines. Triggers when there's more than one entry and the
-/// rendered single-line form (including the leading attribute indent)
-/// would exceed `MAX_LINE_WIDTH`.
-fn should_expand_single_line_object(obj: &Object, depth: usize) -> bool {
+/// multiple lines. Triggers when there's more than one entry and the rendered
+/// single-line form — including the leading indent and any `key = ` prefix
+/// (`prefix_width`) — would exceed `MAX_LINE_WIDTH`.
+fn should_expand_single_line_object(obj: &Object, depth: usize, prefix_width: usize) -> bool {
     if is_multiline_object(obj) {
         return false;
     }
@@ -706,7 +773,7 @@ fn should_expand_single_line_object(obj: &Object, depth: usize) -> bool {
     // Object doesn't implement Display directly; wrap it in an Expression
     // (which does) to render the single-line form for measurement.
     let rendered = Expression::Object(obj.clone()).to_string();
-    let line_width = depth * 2 + rendered.len();
+    let line_width = depth * 2 + prefix_width + rendered.len();
     line_width > MAX_LINE_WIDTH
 }
 
@@ -739,9 +806,18 @@ fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
     let old_obj = std::mem::take(obj);
     let mut entries: Vec<(ObjectKey, hcl_edit::expr::ObjectValue)> = old_obj.into_iter().collect();
 
+    // Decide the canonical terminator before sorting can shuffle a no-comma
+    // entry into the middle of comma-terminated ones. `tofu fmt` preserves the
+    // object's comma style, so we mirror it: if the object used commas at all,
+    // normalize every entry to a comma; otherwise newline-terminate them.
+    let use_commas = entries
+        .iter()
+        .any(|(_, v)| matches!(v.terminator(), ObjectValueTerminator::Comma));
+
     // Recurse into nested values
-    for (_, value) in &mut entries {
-        format_expression(value.expr_mut(), depth + 1, style);
+    for (key, value) in &mut entries {
+        let prefix_width = object_key_str(key).len() + 3; // `key = `
+        format_expression(value.expr_mut(), depth + 1, style, prefix_width);
     }
 
     // Opinionated style: rewrite every `:` separator to `=`
@@ -787,8 +863,8 @@ fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
         };
 
         if style.is_opinionated() {
-            single.sort_by(|(a, _), (b, _)| object_key_str(a).cmp(&object_key_str(b)));
-            multi.sort_by(|(a, _), (b, _)| object_key_str(a).cmp(&object_key_str(b)));
+            single.sort_by_key(|(a, _)| object_key_str(a));
+            multi.sort_by_key(|(a, _)| object_key_str(a));
         }
 
         // Align `=` signs only within consecutive runs of single-line
@@ -807,7 +883,7 @@ fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
 
         let has_single = !single.is_empty();
 
-        for (mut key, value) in single {
+        for (mut key, mut value) in single {
             let needs_leading_newline =
                 !is_first && !matches!(last_terminator, ObjectValueTerminator::Newline);
             let want_blank = need_group_blank && !group_blank_emitted;
@@ -819,16 +895,18 @@ fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
                 &indent,
             );
             key.decor_mut().set_prefix(prefix);
+            normalize_terminator(&mut value, style, use_commas);
             last_terminator = value.terminator();
             obj.insert(key, value);
             is_first = false;
             group_blank_emitted = true;
         }
-        for (i, (mut key, value)) in multi.into_iter().enumerate() {
+        for (i, (mut key, mut value)) in multi.into_iter().enumerate() {
             let want_blank = (i > 0 || has_single) || (need_group_blank && !group_blank_emitted);
             let comments = extract_key_comments(&key);
             let prefix = build_object_key_prefix(is_first, want_blank, &comments, &indent);
             key.decor_mut().set_prefix(prefix);
+            normalize_terminator(&mut value, style, use_commas);
             last_terminator = value.terminator();
             obj.insert(key, value);
             is_first = false;
@@ -848,6 +926,32 @@ fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
         _ => format!("\n{closing_indent}"),
     };
     obj.set_trailing(trailing);
+}
+
+/// Normalize a multi-line object entry's terminator to a single canonical
+/// form. Sorting an object can move a no-comma entry into the middle of
+/// comma-terminated entries, leaving inconsistent separators (`a = 1,` /
+/// `b = 2` / `c = 3,`). Under the opinionated style we normalize every entry
+/// to the object's dominant separator — commas if the object used any
+/// (`use_commas`), otherwise newlines — which keeps the output uniform and
+/// idempotent while matching `tofu fmt`'s preservation of the comma style.
+/// Minimal style is left untouched to preserve `tofu fmt` parity exactly.
+fn normalize_terminator(
+    value: &mut hcl_edit::expr::ObjectValue,
+    style: FormatStyle,
+    use_commas: bool,
+) {
+    if style.is_opinionated() {
+        // Clear any trailing whitespace decor on the value (e.g. the space a
+        // just-expanded inline object carried before its closing `}`), so a
+        // comma terminator renders as `4,` rather than `4 ,`.
+        value.expr_mut().decor_mut().set_suffix("");
+        value.set_terminator(if use_commas {
+            ObjectValueTerminator::Comma
+        } else {
+            ObjectValueTerminator::Newline
+        });
+    }
 }
 
 /// Align `=` across each contiguous run of single-line object
@@ -960,7 +1064,8 @@ pub fn sort_top_level(body: &mut Body, style: FormatStyle) {
                 format_body(&mut block.body, 0, Some(&ident), style);
             }
             Structure::Attribute(attr) => {
-                format_expression(&mut attr.value, 0, style);
+                let prefix_width = attr.key.as_str().len() + 3; // `key = `
+                format_expression(&mut attr.value, 0, style, prefix_width);
             }
         }
     }
@@ -1037,8 +1142,7 @@ pub fn sort_top_level(body: &mut Body, style: FormatStyle) {
                         let comments = extract_comments(&existing);
                         let mut prefix = String::from("\n");
                         for comment in &comments {
-                            prefix.push_str(comment.trim());
-                            prefix.push('\n');
+                            push_comment(&mut prefix, comment, "");
                         }
                         s.decor_mut().set_prefix(prefix);
                     }

@@ -147,6 +147,83 @@ fn fixture_for_expr_value_indent() {
 }
 
 #[test]
+fn fixture_sort_output_blocks() {
+    // TEST-4: a run of `output` blocks must sort alphabetically by name.
+    run_fixture("sort_output_blocks");
+}
+
+#[test]
+fn fixture_sort_data_type_then_name() {
+    // TEST-4: `data` blocks sort by type, then by name within a type.
+    run_fixture("sort_data_type_then_name");
+}
+
+#[test]
+fn fixture_sort_resource_name_tiebreak() {
+    // TEST-4: same-type resources sort on the second label (name),
+    // exercising label_sort_key's tie-break.
+    run_fixture("sort_resource_name_tiebreak");
+}
+
+#[test]
+fn fixture_preserve_module_order() {
+    // TEST-4 (negative): `module` blocks are NOT reordered, while an
+    // adjacent `variable` run still sorts.
+    run_fixture("preserve_module_order");
+}
+
+#[test]
+fn fixture_depends_on_priority() {
+    // TEST-8: single-line meta-args keep their fixed PRIORITY_ATTRS
+    // order (count, provider, depends_on), not alphabetical.
+    run_fixture("depends_on_priority");
+}
+
+#[test]
+fn fixture_whitespace_normalization() {
+    // TEST-7: trailing whitespace, tab indentation, and trailing blank
+    // lines normalize to 2-space indent + single trailing newline.
+    run_fixture("whitespace_normalization");
+}
+
+#[test]
+fn fixture_expand_object_with_key_prefix() {
+    // IMP-2: the single-line-object expansion threshold must count the
+    // `key = ` prefix. This object literal is under 80 columns on its
+    // own but crosses the budget once the long attribute name is
+    // included, so it must expand. The same object under a short key
+    // stays inline (see the short-key case in the CLI/edge tests).
+    run_fixture("expand_object_with_key_prefix");
+}
+
+#[test]
+fn fixture_object_comma_normalized() {
+    // BUG-5 regression: sorting a multi-line object whose entries mix
+    // comma and no-comma terminators must normalize them to one
+    // canonical form (newline-terminated, no trailing commas) rather
+    // than leaving a stray no-comma entry stranded in the middle.
+    run_fixture("object_comma_normalized");
+}
+
+#[test]
+fn fixture_block_comments() {
+    // BUG-1 regression: multi-line `/* ... */` block comments must
+    // survive reordering intact — over a reordered attribute, over a
+    // reordered object key, and a star-aligned block — without being
+    // truncated into unparseable output. Idempotency is asserted by
+    // run_fixture.
+    run_fixture("block_comments");
+}
+
+#[test]
+fn fixture_heredoc_preserved() {
+    // BUG-2 regression: trailing whitespace, tabs, and blank lines
+    // inside heredoc bodies (`<<EOT` / `<<-EOT`) are literal string
+    // content and must NOT be stripped by whitespace post-processing.
+    run_fixture("heredoc_preserved");
+}
+
+#[test]
 fn fixture_opinionated_collapses_blank_groups() {
     // Regression: opinionated mode must IGNORE author blank
     // lines inside a block. All single-line attrs collapse into
