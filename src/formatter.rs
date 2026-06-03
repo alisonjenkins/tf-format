@@ -296,7 +296,11 @@ fn object_entry_blank_lines(
     if style.is_opinionated() {
         return want_blank as usize;
     }
-    let prefix = key.decor().prefix().map(|p| p.to_string()).unwrap_or_default();
+    let prefix = key
+        .decor()
+        .prefix()
+        .map(|p| p.to_string())
+        .unwrap_or_default();
     let leading = count_leading_newlines(&prefix);
     let blanks = if add_structural {
         leading.saturating_sub(1)
@@ -496,7 +500,11 @@ fn format_structure_group_minimal(
         // structures itself). `want_group_blank` carries the blank that caused
         // this group to split off from the previous one, but only for the very
         // first body group boundary where the count would otherwise be lost.
-        let existing_prefix = s.decor().prefix().map(|p| p.to_string()).unwrap_or_default();
+        let existing_prefix = s
+            .decor()
+            .prefix()
+            .map(|p| p.to_string())
+            .unwrap_or_default();
         let mut blank_lines = count_leading_newlines(&existing_prefix);
         if i == 0 && want_group_blank && blank_lines == 0 {
             blank_lines = 1;

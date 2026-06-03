@@ -89,7 +89,11 @@ fn opinionated_drops_array_blank_lines_but_keeps_comments() {
     let input = "x = [\n  \"a\",\n\n  # keep me\n  \"b\",\n\n\n]\n";
     let out = fmt(input);
     assert_eq!(out, "x = [\n  \"a\",\n  # keep me\n  \"b\",\n]\n");
-    assert_eq!(fmt(&out), out, "array blank-line cleanup must be idempotent");
+    assert_eq!(
+        fmt(&out),
+        out,
+        "array blank-line cleanup must be idempotent"
+    );
 }
 
 #[test]
@@ -98,7 +102,10 @@ fn opinionated_strips_blank_lines_before_closing_brace() {
     // in opinionated mode, at every nesting level.
     let input = "resource \"a\" \"b\" {\n  nested {\n    x = 1\n\n\n  }\n\n\n}\n";
     let out = fmt(input);
-    assert_eq!(out, "resource \"a\" \"b\" {\n  nested {\n    x = 1\n  }\n}\n");
+    assert_eq!(
+        out,
+        "resource \"a\" \"b\" {\n  nested {\n    x = 1\n  }\n}\n"
+    );
     assert_eq!(fmt(&out), out);
 }
 
@@ -113,7 +120,10 @@ fn opinionated_does_not_strip_blank_lines_inside_heredoc() {
         "heredoc body blank line / brace line was altered: {out:?}"
     );
     // The blank lines AFTER the heredoc closes, before the block `}`, are gone.
-    assert!(out.ends_with("  EOT\n}\n"), "trailing blanks not stripped: {out:?}");
+    assert!(
+        out.ends_with("  EOT\n}\n"),
+        "trailing blanks not stripped: {out:?}"
+    );
     assert_eq!(fmt(&out), out);
 }
 
