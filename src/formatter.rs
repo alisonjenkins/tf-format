@@ -42,11 +42,19 @@ impl FormatStyle {
 fn priorities_for_block(ident: &str) -> (&'static [&'static str], &'static [&'static str]) {
     match ident {
         // resource / data / ephemeral / action share the same meta-args.
-        "resource" | "data" | "ephemeral" | "action" => {
-            (&["count", "for_each", "provider", "depends_on"], &["lifecycle"])
-        }
+        "resource" | "data" | "ephemeral" | "action" => (
+            &["count", "for_each", "provider", "depends_on"],
+            &["lifecycle"],
+        ),
         "module" => (
-            &["source", "version", "providers", "count", "for_each", "depends_on"],
+            &[
+                "source",
+                "version",
+                "providers",
+                "count",
+                "for_each",
+                "depends_on",
+            ],
             &["lifecycle"],
         ),
         "import" => (&["for_each", "provider"], &[]),
@@ -271,12 +279,7 @@ fn adjust_structure_prefix(structure: &mut Structure, want_blank_line: bool, ind
 ///
 /// Under [`FormatStyle::Minimal`] the partitioning + sorting is
 /// suppressed; only `=` alignment within blank-line groups runs.
-pub fn format_body(
-    body: &mut Body,
-    depth: usize,
-    parent_ident: Option<&str>,
-    style: FormatStyle,
-) {
+pub fn format_body(body: &mut Body, depth: usize, parent_ident: Option<&str>, style: FormatStyle) {
     let indent = "  ".repeat(depth + 1);
 
     // Preserve body-level metadata
@@ -803,6 +806,14 @@ fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
     let old_obj = std::mem::take(obj);
     let mut entries: Vec<(ObjectKey, hcl_edit::expr::ObjectValue)> = old_obj.into_iter().collect();
 
+    // Decide the canonical terminator before sorting can shuffle a no-comma
+    // entry into the middle of comma-terminated ones. `tofu fmt` preserves the
+    // object's comma style, so we mirror it: if the object used commas at all,
+    // normalize every entry to a comma; otherwise newline-terminate them.
+    let use_commas = entries
+        .iter()
+        .any(|(_, v)| matches!(v.terminator(), ObjectValueTerminator::Comma));
+
     // Recurse into nested values
     for (key, value) in &mut entries {
         let prefix_width = object_key_str(key).len() + 3; // `key = `
@@ -852,8 +863,8 @@ fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
         };
 
         if style.is_opinionated() {
-            single.sort_by(|(a, _), (b, _)| object_key_str(a).cmp(&object_key_str(b)));
-            multi.sort_by(|(a, _), (b, _)| object_key_str(a).cmp(&object_key_str(b)));
+            single.sort_by_key(|(a, _)| object_key_str(a));
+            multi.sort_by_key(|(a, _)| object_key_str(a));
         }
 
         // Align `=` signs only within consecutive runs of single-line
@@ -884,7 +895,7 @@ fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
                 &indent,
             );
             key.decor_mut().set_prefix(prefix);
-            normalize_terminator(&mut value, style);
+            normalize_terminator(&mut value, style, use_commas);
             last_terminator = value.terminator();
             obj.insert(key, value);
             is_first = false;
@@ -895,7 +906,7 @@ fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
             let comments = extract_key_comments(&key);
             let prefix = build_object_key_prefix(is_first, want_blank, &comments, &indent);
             key.decor_mut().set_prefix(prefix);
-            normalize_terminator(&mut value, style);
+            normalize_terminator(&mut value, style, use_commas);
             last_terminator = value.terminator();
             obj.insert(key, value);
             is_first = false;
@@ -920,14 +931,26 @@ fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
 /// Normalize a multi-line object entry's terminator to a single canonical
 /// form. Sorting an object can move a no-comma entry into the middle of
 /// comma-terminated entries, leaving inconsistent separators (`a = 1,` /
-/// `b = 2` / `c = 3,`). Under the opinionated style we render every entry
-/// newline-terminated (no trailing commas), the form already produced for the
-/// vast majority of multi-line objects; this makes the output uniform and
-/// idempotent regardless of the author's original separators. Minimal style is
-/// left untouched to preserve `tofu fmt` parity.
-fn normalize_terminator(value: &mut hcl_edit::expr::ObjectValue, style: FormatStyle) {
+/// `b = 2` / `c = 3,`). Under the opinionated style we normalize every entry
+/// to the object's dominant separator — commas if the object used any
+/// (`use_commas`), otherwise newlines — which keeps the output uniform and
+/// idempotent while matching `tofu fmt`'s preservation of the comma style.
+/// Minimal style is left untouched to preserve `tofu fmt` parity exactly.
+fn normalize_terminator(
+    value: &mut hcl_edit::expr::ObjectValue,
+    style: FormatStyle,
+    use_commas: bool,
+) {
     if style.is_opinionated() {
-        value.set_terminator(ObjectValueTerminator::Newline);
+        // Clear any trailing whitespace decor on the value (e.g. the space a
+        // just-expanded inline object carried before its closing `}`), so a
+        // comma terminator renders as `4,` rather than `4 ,`.
+        value.expr_mut().decor_mut().set_suffix("");
+        value.set_terminator(if use_commas {
+            ObjectValueTerminator::Comma
+        } else {
+            ObjectValueTerminator::Newline
+        });
     }
 }
 

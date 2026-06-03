@@ -1,7 +1,7 @@
 locals {
   obj = {
-    alpha = 2
-    mid   = 3
-    zeta  = 1
+    alpha = 2,
+    mid   = 3,
+    zeta  = 1,
   }
 }
