@@ -407,7 +407,10 @@ pub fn format_body(body: &mut Body, depth: usize, parent_ident: Option<&str>, st
 /// tiers, and push the result onto `body`. `indent` is the indentation string
 /// for each structure; `want_group_blank` asks for a blank line before the
 /// first emitted structure; `any_emitted_before` is the running "anything
-/// already pushed?" flag. Returns the updated flag.
+/// already pushed?" flag. `oneline` flags a `prefer_oneline` body so emitted
+/// structures get a single-space prefix instead of newline+indent. Returns the
+/// updated flag.
+#[allow(clippy::too_many_arguments)]
 fn format_structure_group(
     body: &mut Body,
     group: Vec<Structure>,
