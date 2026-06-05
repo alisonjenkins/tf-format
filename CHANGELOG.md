@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.5](https://github.com/alisonjenkins/tf-format/compare/v0.4.4...v0.4.5) (2026-06-05)
+
+
+### Bug Fixes
+
+* **formatter:** keep single space in one-line block bodies ([42ca9b1](https://github.com/alisonjenkins/tf-format/commit/42ca9b13fcf8729cff51ff64ea694efd38c8605e))
+* **formatter:** silence clippy too-many-arguments on format_structure_group ([4a0dd1e](https://github.com/alisonjenkins/tf-format/commit/4a0dd1e21900466fff4a91582227ce0e638c33b2))
+
 ## [0.4.4](https://github.com/alisonjenkins/tf-format/compare/v0.4.3...v0.4.4) (2026-06-03)
 
 
