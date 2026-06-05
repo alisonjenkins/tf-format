@@ -11,6 +11,25 @@ use tf_format::{FormatOptions, FormatStyle};
 
 const TF_EXTENSIONS: &[&str] = &["tf", "tofu", "tfvars"];
 
+/// Filename suffixes for Terraform/OpenTofu test files. These carry a `.hcl`
+/// (or `.json`) final extension, so `Path::extension` reports `hcl`, not
+/// `tftest` — match the full suffix instead to avoid formatting every `.hcl`.
+const TF_TEST_SUFFIXES: &[&str] = &[".tftest.hcl", ".tofutest.hcl"];
+
+/// Whether `path` is a Terraform/OpenTofu file we should format: a recognised
+/// extension (`.tf`, `.tofu`, `.tfvars`) or a test-file suffix
+/// (`.tftest.hcl`, `.tofutest.hcl`).
+fn is_tf_file(path: &Path) -> bool {
+    if let Some(ext) = path.extension().and_then(|e| e.to_str())
+        && TF_EXTENSIONS.contains(&ext)
+    {
+        return true;
+    }
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|name| TF_TEST_SUFFIXES.iter().any(|suffix| name.ends_with(suffix)))
+}
+
 /// Style selector exposed on the CLI. Maps 1:1 to
 /// [`tf_format::FormatStyle`]; declared separately so the CLI's
 /// derive macro doesn't reach into the library type.
@@ -326,13 +345,31 @@ fn collect_tf_files_recursive(
                 continue;
             }
             collect_tf_files_recursive(&path, paths)?;
-        } else if file_type.is_file()
-            && let Some(ext) = path.extension().and_then(|e| e.to_str())
-            && TF_EXTENSIONS.contains(&ext)
-        {
+        } else if file_type.is_file() && is_tf_file(&path) {
             paths.push(path);
         }
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recognises_tf_extensions_and_test_suffixes() {
+        for ok in [
+            "main.tf",
+            "main.tofu",
+            "terraform.tfvars",
+            "setup.tftest.hcl",
+            "setup.tofutest.hcl",
+        ] {
+            assert!(is_tf_file(Path::new(ok)), "{ok} should be a tf file");
+        }
+        for skip in ["README.md", "config.hcl", "data.json", "notes.txt"] {
+            assert!(!is_tf_file(Path::new(skip)), "{skip} should be skipped");
+        }
+    }
 }

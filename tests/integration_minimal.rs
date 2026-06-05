@@ -170,3 +170,12 @@ fn fixture_heredoc_alignment() {
     // and object contexts.
     run_minimal_fixture("heredoc_alignment");
 }
+
+#[test]
+fn fixture_single_line_block() {
+    // Single-line block bodies keep exactly ONE space after `{`,
+    // byte-for-byte with `terraform fmt` (no blank-line insertion,
+    // no expansion). Regression: the prefix used to emit the full
+    // indent → `{  alias`.
+    run_minimal_fixture("single_line_block");
+}

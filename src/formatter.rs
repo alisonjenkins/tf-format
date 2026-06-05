@@ -311,9 +311,21 @@ fn object_entry_blank_lines(
 }
 
 /// Adjust the prefix decoration on a body structure, emitting `blank_lines`
-/// blank lines before it.
-fn adjust_structure_prefix(structure: &mut Structure, blank_lines: usize, indent: &str) {
+/// blank lines before it. When `oneline` is set the body stays on a single line
+/// (hcl-edit emits no inter-structure `\n`), so the prefix is just the single
+/// space that separates `{` from the first structure — no newline, indent, or
+/// comment handling (one-line bodies carry none).
+fn adjust_structure_prefix(
+    structure: &mut Structure,
+    blank_lines: usize,
+    indent: &str,
+    oneline: bool,
+) {
     let decor = structure.decor_mut();
+    if oneline {
+        decor.set_prefix(" ");
+        return;
+    }
     let existing_prefix = decor.prefix().map(|p| p.to_string()).unwrap_or_default();
 
     let comments = extract_comments(&existing_prefix);
@@ -380,6 +392,7 @@ pub fn format_body(body: &mut Body, depth: usize, parent_ident: Option<&str>, st
             any_emitted,
             parent_ident,
             style,
+            prefer_oneline,
         );
     }
 
@@ -403,6 +416,7 @@ fn format_structure_group(
     any_emitted_before: bool,
     parent_ident: Option<&str>,
     style: FormatStyle,
+    oneline: bool,
 ) -> bool {
     if !style.is_opinionated() {
         return format_structure_group_minimal(
@@ -411,6 +425,7 @@ fn format_structure_group(
             indent,
             want_group_blank,
             any_emitted_before,
+            oneline,
         );
     }
 
@@ -448,14 +463,14 @@ fn format_structure_group(
 
     for (i, mut s) in priority_single.into_iter().enumerate() {
         let want_blank = if i == 0 { want_group_blank } else { false };
-        adjust_structure_prefix(&mut s, want_blank as usize, indent);
+        adjust_structure_prefix(&mut s, want_blank as usize, indent, oneline);
         body.push(s);
         any_emitted = true;
     }
 
     for (i, mut s) in priority_multi.into_iter().enumerate() {
         let want_blank = i > 0 || has_priority_single || (i == 0 && want_group_blank);
-        adjust_structure_prefix(&mut s, want_blank as usize, indent);
+        adjust_structure_prefix(&mut s, want_blank as usize, indent, oneline);
         body.push(s);
         any_emitted = true;
     }
@@ -464,14 +479,14 @@ fn format_structure_group(
 
     for (i, mut s) in normal_single.into_iter().enumerate() {
         let want_blank = i == 0 && (has_priority || want_group_blank);
-        adjust_structure_prefix(&mut s, want_blank as usize, indent);
+        adjust_structure_prefix(&mut s, want_blank as usize, indent, oneline);
         body.push(s);
         any_emitted = true;
     }
 
     for (i, mut s) in normal_multi.into_iter().enumerate() {
         let want_blank = i > 0 || has_normal_single || has_priority || (i == 0 && want_group_blank);
-        adjust_structure_prefix(&mut s, want_blank as usize, indent);
+        adjust_structure_prefix(&mut s, want_blank as usize, indent, oneline);
         body.push(s);
         any_emitted = true;
     }
@@ -489,6 +504,7 @@ fn format_structure_group_minimal(
     indent: &str,
     want_group_blank: bool,
     any_emitted_before: bool,
+    oneline: bool,
 ) -> bool {
     align_body_attributes_in_place(&mut group);
 
@@ -509,7 +525,7 @@ fn format_structure_group_minimal(
         if i == 0 && want_group_blank && blank_lines == 0 {
             blank_lines = 1;
         }
-        adjust_structure_prefix(&mut s, blank_lines, indent);
+        adjust_structure_prefix(&mut s, blank_lines, indent, oneline);
         body.push(s);
         any_emitted = true;
     }
@@ -1357,6 +1373,7 @@ pub fn sort_top_level(body: &mut Body, style: FormatStyle) {
                         any_emitted,
                         None,
                         style,
+                        false,
                     );
                 }
             }

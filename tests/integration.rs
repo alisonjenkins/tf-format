@@ -276,3 +276,13 @@ fn fixture_provider_no_version_hoist() {
     // here (per OpenTofu). `version` is treated as a normal attr.
     run_fixture("provider_no_version_hoist");
 }
+
+#[test]
+fn fixture_single_line_block() {
+    // Single-line block bodies (e.g. `mock_provider "x" { alias = "y" }`,
+    // as seen in .tftest files) keep exactly ONE space after `{`, matching
+    // `terraform fmt`. Regression: the body prefix used to emit the full
+    // indent (2 spaces) → `{  alias`. Also covers empty `{}` and a
+    // one-line block nested inside a multi-line body.
+    run_fixture("single_line_block");
+}

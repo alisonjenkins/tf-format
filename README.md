@@ -82,7 +82,7 @@ nix develop  # includes rust-analyzer, clippy, rustfmt
 # Format files in-place
 tf-format main.tf variables.tf
 
-# Format all .tf/.tofu/.tfvars files in a directory (recursive)
+# Format all .tf/.tofu/.tfvars/.tftest.hcl files in a directory (recursive)
 tf-format .
 
 # Check if files are formatted (for CI pipelines, exits 1 if changes needed)
@@ -131,7 +131,9 @@ repos:
 
 ### Supported file types
 
-`.tf`, `.tofu`, `.tfvars` — all discovered automatically when scanning directories.
+`.tf`, `.tofu`, `.tfvars`, `.tftest.hcl`, `.tofutest.hcl` — all discovered
+automatically when scanning directories. Any explicit file path is formatted
+regardless of extension.
 
 ## Formatting Rules
 
