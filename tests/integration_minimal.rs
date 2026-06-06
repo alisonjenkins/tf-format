@@ -50,6 +50,21 @@ fn fixture_no_meta_hoisting() {
 }
 
 #[test]
+fn fixture_leading_comments_preserved() {
+    // P0 (data loss): a file's leading comments + the blank line after them
+    // must survive minimal formatting. The top-level flattener used to clear
+    // the first structure's prefix unconditionally, deleting them.
+    run_minimal_fixture("leading_comments");
+}
+
+#[test]
+fn fixture_object_inline_comment_stays_inline() {
+    // A comment on the same line as an object's opening `{` stays inline
+    // (`tofu fmt` keeps it), while comments on their own lines move down.
+    run_minimal_fixture("object_inline_comment");
+}
+
+#[test]
 fn fixture_equals_alignment() {
     // Mis-aligned `=` signs become column-aligned in minimal mode
     // (this is the spacing transform tofu fmt also applies).
