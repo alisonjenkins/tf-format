@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.6](https://github.com/alisonjenkins/tf-format/compare/v0.4.5...v0.4.6) (2026-06-06)
+
+
+### Bug Fixes
+
+* **formatter:** preserve leading + inline object comments (minimal-mode parity) ([#48](https://github.com/alisonjenkins/tf-format/issues/48)) ([cd3a090](https://github.com/alisonjenkins/tf-format/commit/cd3a09095ab347a260fd8c6519b60a910090e69b))
+
 ## [0.4.5](https://github.com/alisonjenkins/tf-format/compare/v0.4.4...v0.4.5) (2026-06-05)
 
 
