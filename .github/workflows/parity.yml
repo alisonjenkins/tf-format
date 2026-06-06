@@ -5,6 +5,10 @@ name: parity
 # no-op under tf-format. scripts/parity-check.sh proves it; run it over the
 # committed fixtures (deterministic — no external clones). Real-repo sweeps live
 # in the same script: `parity-check.sh <some-cloned-repo>`.
+#
+# Like CI's `Test`, the `tofu fmt parity` job ALWAYS runs (via the `changes`
+# guard) and short-circuits to success when nothing that could affect parity
+# changed — so it can be a required status check without the path-filter deadlock.
 on:
   push:
     branches: [main]
@@ -14,14 +18,45 @@ permissions:
   contents: read
 
 jobs:
-  parity:
-    name: tofu fmt parity
+  changes:
+    name: Detect parity-relevant changes
     runs-on: ubuntu-latest
+    outputs:
+      relevant: ${{ steps.filter.outputs.relevant }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4
+        id: filter
+        with:
+          filters: |
+            relevant:
+              - 'src/**'
+              - 'scripts/parity-check.sh'
+              - 'tests/parity/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'flake.nix'
+              - 'flake.lock'
+              - 'rust-toolchain.toml'
+              - '.github/workflows/parity.yml'
+
+  parity:
+    name: tofu fmt parity
+    needs: changes
+    runs-on: ubuntu-latest
+    steps:
+      - name: Skip (no parity-relevant changes)
+        if: needs.changes.outputs.relevant != 'true'
+        run: echo "Nothing affecting parity changed — parity is a no-op success."
+
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        if: needs.changes.outputs.relevant == 'true'
       - uses: DeterminateSystems/nix-installer-action@1d87d45818068401a10cf16bdc5f00b24994a83f # main
+        if: needs.changes.outputs.relevant == 'true'
       - uses: DeterminateSystems/magic-nix-cache-action@14645543c3b214bedad3b9b49775cb042f4c1fc7 # main
+        if: needs.changes.outputs.relevant == 'true'
       - name: tf-format minimal vs tofu fmt (fixtures)
+        if: needs.changes.outputs.relevant == 'true'
         run: |
           nix develop --command bash -euo pipefail -c '
             cargo build --release
