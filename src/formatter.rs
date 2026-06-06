@@ -241,6 +241,22 @@ fn push_comment(prefix: &mut String, comment: &str, indent: &str) {
     }
 }
 
+/// Whether `prefix` holds at least one blank line *after* its comments (i.e. a
+/// separating blank between header comments and the following block). Compares
+/// the newline count of the raw prefix against what re-emitting just the
+/// comments would produce — any surplus is a blank line. `tofu fmt` keeps one
+/// such blank, so the caller re-emits a single `\n` when this is true.
+fn blank_after_comments(prefix: &str) -> bool {
+    let comments = extract_comments(prefix);
+    let mut rendered = String::new();
+    for comment in &comments {
+        push_comment(&mut rendered, comment, "");
+    }
+    let raw_newlines = prefix.matches('\n').count();
+    let comment_newlines = rendered.matches('\n').count();
+    raw_newlines > comment_newlines
+}
+
 /// Build a prefix for a body structure. The Body/Block encoding adds `\n`
 /// between structures, so the prefix only needs indent (and optionally an
 /// extra `\n` for a blank line separator).
@@ -262,11 +278,19 @@ fn build_body_prefix(blank_lines: usize, comments: &[String], indent: &str) -> S
 fn build_object_key_prefix(
     add_structural_newline: bool,
     blank_lines: usize,
+    inline_comment: Option<&str>,
     comments: &[String],
     indent: &str,
 ) -> String {
     let mut prefix = String::new();
-    if add_structural_newline {
+    if let Some(comment) = inline_comment {
+        // A comment that hugged the opening `{` on the same line stays inline
+        // (`{ # comment`), matching `tofu fmt`. The newline it owns replaces the
+        // structural newline that would otherwise precede the first entry.
+        prefix.push(' ');
+        prefix.push_str(comment);
+        prefix.push('\n');
+    } else if add_structural_newline {
         prefix.push('\n');
     }
     for _ in 0..blank_lines {
@@ -277,6 +301,22 @@ fn build_object_key_prefix(
     }
     prefix.push_str(indent);
     prefix
+}
+
+/// Split a first-entry prefix into (inline comment hugging `{`, remaining
+/// comments). `tofu fmt` keeps a comment written on the same line as the object
+/// opening brace inline; any comments on their own lines below it move to their
+/// own lines as usual. Only the leading single-line comment qualifies as inline.
+fn split_leading_inline_comment(prefix: &str) -> (Option<String>, Vec<String>) {
+    let first_line = prefix.lines().next().unwrap_or("").trim();
+    let is_inline = first_line.starts_with('#')
+        || first_line.starts_with("//")
+        || (first_line.starts_with("/*") && first_line.ends_with("*/"));
+    if !is_inline {
+        return (None, extract_comments(prefix));
+    }
+    let rest = prefix.split_once('\n').map(|(_, r)| r).unwrap_or("");
+    (Some(first_line.to_string()), extract_comments(rest))
 }
 
 /// Number of blank lines to emit before an object entry.
@@ -1130,8 +1170,21 @@ fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
                 add_structural,
                 need_group_blank && !group_blank_emitted,
             );
-            let comments = extract_key_comments(&key);
-            let prefix = build_object_key_prefix(add_structural, blank_lines, &comments, &indent);
+            // Minimal style preserves a comment that hugged the opening `{` on
+            // the same line as the first entry (`tofu fmt` keeps it inline).
+            let (inline_comment, comments) = if is_first && !style.is_opinionated() {
+                let raw = key.decor().prefix().map(|p| p.to_string()).unwrap_or_default();
+                split_leading_inline_comment(&raw)
+            } else {
+                (None, extract_key_comments(&key))
+            };
+            let prefix = build_object_key_prefix(
+                add_structural,
+                blank_lines,
+                inline_comment.as_deref(),
+                &comments,
+                &indent,
+            );
             key.decor_mut().set_prefix(prefix);
             normalize_terminator(&mut value, style, use_commas);
             last_terminator = value.terminator();
@@ -1142,8 +1195,19 @@ fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
         for (i, (mut key, mut value)) in multi.into_iter().enumerate() {
             let want_blank = (i > 0 || has_single) || (need_group_blank && !group_blank_emitted);
             let blank_lines = object_entry_blank_lines(style, &key, is_first, want_blank);
-            let comments = extract_key_comments(&key);
-            let prefix = build_object_key_prefix(is_first, blank_lines, &comments, &indent);
+            let (inline_comment, comments) = if is_first && !style.is_opinionated() {
+                let raw = key.decor().prefix().map(|p| p.to_string()).unwrap_or_default();
+                split_leading_inline_comment(&raw)
+            } else {
+                (None, extract_key_comments(&key))
+            };
+            let prefix = build_object_key_prefix(
+                is_first,
+                blank_lines,
+                inline_comment.as_deref(),
+                &comments,
+                &indent,
+            );
             key.decor_mut().set_prefix(prefix);
             normalize_terminator(&mut value, style, use_commas);
             last_terminator = value.terminator();
@@ -1383,7 +1447,30 @@ pub fn sort_top_level(body: &mut Body, style: FormatStyle) {
             TopLevelRunKind::Block(_) => {
                 for mut s in group {
                     if !any_emitted {
-                        s.decor_mut().set_prefix("");
+                        // First top-level structure: no preceding block, so no
+                        // blank-line separator — but the file's leading comments
+                        // live in THIS structure's prefix. Preserve them instead
+                        // of blindly clearing (was data loss). `tofu fmt` keeps a
+                        // single blank line between header comments and the first
+                        // block, so re-emit one if the source had any.
+                        let existing = s
+                            .decor()
+                            .prefix()
+                            .map(|p| p.to_string())
+                            .unwrap_or_default();
+                        let comments = extract_comments(&existing);
+                        if comments.is_empty() {
+                            s.decor_mut().set_prefix("");
+                        } else {
+                            let mut prefix = String::new();
+                            for comment in &comments {
+                                push_comment(&mut prefix, comment, "");
+                            }
+                            if blank_after_comments(&existing) {
+                                prefix.push('\n');
+                            }
+                            s.decor_mut().set_prefix(prefix);
+                        }
                     } else {
                         // Preserve comments, normalize spacing between top-level
                         // blocks to one blank line.
