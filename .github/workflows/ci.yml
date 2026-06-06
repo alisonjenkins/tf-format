@@ -1,5 +1,14 @@
 name: CI
 
+# Build, lint, format-check, test and dependency-review on every push to main
+# and every PR.
+#
+# The `Test` job ALWAYS runs (via the `changes` guard below) so it can be a
+# required status check without the path-filter deadlock: a job skipped with a
+# top-level `if:` never reports its check, which blocks merges on PRs that don't
+# touch buildable code (docs, workflow tweaks). Here the job runs unconditionally
+# and short-circuits to success when no Rust/build inputs changed, so the check
+# always reports.
 on:
   push:
     branches: [main]
@@ -9,29 +18,65 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    name: Test
+  changes:
+    name: Detect changes
     runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4
+        id: filter
+        with:
+          filters: |
+            rust:
+              - 'src/**'
+              - 'tests/**'
+              - 'benches/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'flake.nix'
+              - 'flake.lock'
+              - 'rust-toolchain.toml'
+              - 'deny.toml'
+              - '.github/workflows/ci.yml'
+
+  test:
+    name: Test
+    needs: changes
+    runs-on: ubuntu-latest
+    steps:
+      - name: Skip (no buildable changes)
+        if: needs.changes.outputs.rust != 'true'
+        run: echo "No Rust/build inputs changed — Test is a no-op success."
+
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        if: needs.changes.outputs.rust == 'true'
 
       - uses: DeterminateSystems/nix-installer-action@1d87d45818068401a10cf16bdc5f00b24994a83f # main
+        if: needs.changes.outputs.rust == 'true'
 
       - uses: DeterminateSystems/magic-nix-cache-action@14645543c3b214bedad3b9b49775cb042f4c1fc7 # main
+        if: needs.changes.outputs.rust == 'true'
 
       - name: Build
+        if: needs.changes.outputs.rust == 'true'
         run: nix build
 
       - name: Check formatting
+        if: needs.changes.outputs.rust == 'true'
         run: nix develop --command cargo fmt --check
 
       - name: Clippy
+        if: needs.changes.outputs.rust == 'true'
         run: nix develop --command cargo clippy -- -D warnings
 
       - name: Run tests
+        if: needs.changes.outputs.rust == 'true'
         run: nix develop --command cargo test
 
       - name: cargo deny
+        if: needs.changes.outputs.rust == 'true'
         run: nix develop --command cargo deny check
 
   dependency-review:
