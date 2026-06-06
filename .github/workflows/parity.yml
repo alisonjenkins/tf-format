@@ -1,0 +1,29 @@
+name: parity
+
+# Guard `tf-format --style minimal` against `tofu fmt`: minimal mode promises
+# `terraform fmt` / `tofu fmt` parity, so a tofu-fmt-canonical fixture must be a
+# no-op under tf-format. scripts/parity-check.sh proves it; run it over the
+# committed fixtures (deterministic — no external clones). Real-repo sweeps live
+# in the same script: `parity-check.sh <some-cloned-repo>`.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  parity:
+    name: tofu fmt parity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: DeterminateSystems/nix-installer-action@1d87d45818068401a10cf16bdc5f00b24994a83f # main
+      - uses: DeterminateSystems/magic-nix-cache-action@14645543c3b214bedad3b9b49775cb042f4c1fc7 # main
+      - name: tf-format minimal vs tofu fmt (fixtures)
+        run: |
+          nix develop --command bash -euo pipefail -c '
+            cargo build --release
+            TF_FORMAT=target/release/tf-format ./scripts/parity-check.sh tests/parity/fixtures
+          '
