@@ -72,6 +72,15 @@ fn fixture_equals_alignment() {
 }
 
 #[test]
+fn fixture_multiline_attr_stale_alignment() {
+    // A multi-line attribute (`tags = merge(...)`) breaks the `=` run, so its
+    // `=` must get a single space — even when it arrives pre-aligned (e.g. the
+    // value was single-line, got column-aligned, then split across lines).
+    // tofu fmt strips the stale padding; minimal mode must match (idempotency).
+    run_minimal_fixture("multiline_attr_stale_alignment");
+}
+
+#[test]
 fn fixture_object_keys_unsorted() {
     // Object keys written z, a, m — minimal style must NOT
     // alphabetise.
