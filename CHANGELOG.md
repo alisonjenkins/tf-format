@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.7](https://github.com/alisonjenkins/tf-format/compare/v0.4.6...v0.4.7) (2026-06-08)
+
+
+### Bug Fixes
+
+* **formatter:** strip stale =-alignment from multi-line attrs and preserve tofu layout ([4875126](https://github.com/alisonjenkins/tf-format/commit/48751264e8094b679f5eb41c42d3bf34e2bde19c))
+
 ## [0.4.6](https://github.com/alisonjenkins/tf-format/compare/v0.4.5...v0.4.6) (2026-06-06)
 
 
