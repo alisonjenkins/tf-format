@@ -499,6 +499,13 @@ fn format_structure_group(
     align_body_attributes(&mut priority_single);
     align_body_attributes(&mut normal_single);
 
+    // Multi-line attributes break the `=` run and are never column-padded;
+    // strip any stale alignment so output is idempotent (single→multi-line
+    // edits don't leave a once-aligned `=` behind).
+    for s in priority_multi.iter_mut().chain(normal_multi.iter_mut()) {
+        normalize_unaligned_attribute(s);
+    }
+
     let has_priority = !priority_single.is_empty() || !priority_multi.is_empty();
     let has_priority_single = !priority_single.is_empty();
 
@@ -582,8 +589,13 @@ fn format_structure_group_minimal(
 fn align_body_attributes_in_place(structures: &mut [Structure]) {
     let mut i = 0;
     while i < structures.len() {
-        // Advance past anything that isn't a single-line attribute.
+        // Advance past anything that isn't a single-line attribute. Multi-line
+        // attributes break the alignment run, so they are never column-padded —
+        // but any stale padding (e.g. left over from when the value was a
+        // single-line expression) must be stripped, or formatting is not
+        // idempotent and a once-aligned `=` survives a single→multi-line edit.
         while i < structures.len() && !is_single_line_attribute(&structures[i]) {
+            normalize_unaligned_attribute(&mut structures[i]);
             i += 1;
         }
         let run_start = i;
@@ -929,6 +941,22 @@ fn align_body_attributes(structures: &mut [Structure]) {
     }
 }
 
+/// Normalize the `=` spacing of an attribute that is *not* part of an `=`
+/// alignment run — a multi-line value (object/array/func-call spanning lines)
+/// breaks the run, so its `=` gets a single space on each side rather than
+/// column padding, matching `terraform fmt` / `tofu fmt`. Heredocs keep their
+/// `=` on the opening line and stay inside the run, so they are left untouched
+/// here. No-op on blocks.
+fn normalize_unaligned_attribute(s: &mut Structure) {
+    if let Structure::Attribute(attr) = s {
+        if is_heredoc_expr(&attr.value) {
+            return;
+        }
+        attr.key.decor_mut().set_suffix(" ");
+        attr.value.decor_mut().set_prefix(" ");
+    }
+}
+
 /// Align a single contiguous group of attributes (no comments between them).
 fn align_body_attribute_group(structures: &mut [Structure]) {
     let max_key_len = structures
@@ -1161,9 +1189,35 @@ fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
         let has_single = !single.is_empty();
 
         for (mut key, mut value) in single {
-            let needs_leading_newline =
-                !is_first && !matches!(last_terminator, ObjectValueTerminator::Newline);
+            // After a Newline-terminated entry the line break is already
+            // emitted by that terminator, so this entry sits on its own line
+            // regardless of its own prefix. After a comma (or no terminator)
+            // the layout depends on what the author wrote: `tofu fmt` preserves
+            // an object's line layout exactly — comma-separated entries sharing
+            // a physical line stay together, it never reflows them one-per-line.
+            let prev_was_newline = matches!(last_terminator, ObjectValueTerminator::Newline);
+            let had_source_newline = count_leading_newlines(
+                &key.decor()
+                    .prefix()
+                    .map(|p| p.to_string())
+                    .unwrap_or_default(),
+            ) > 0;
+            let needs_leading_newline = if style.is_opinionated() {
+                // Opinionated: one entry per line (newline unless the previous
+                // terminator already supplied it).
+                !is_first && !prev_was_newline
+            } else {
+                // Minimal: only emit our own newline when the author wrote one
+                // after a comma; an own-line entry already has its newline from
+                // the previous terminator.
+                !is_first && !prev_was_newline && had_source_newline
+            };
             let add_structural = is_first || needs_leading_newline;
+            // Minimal: an entry the author kept on the previous entry's line
+            // (comma terminator, no newline before it) gets a single space
+            // after the comma — no newline/indent.
+            let same_line =
+                !style.is_opinionated() && !is_first && !prev_was_newline && !had_source_newline;
             let blank_lines = object_entry_blank_lines(
                 style,
                 &key,
@@ -1182,13 +1236,17 @@ fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
             } else {
                 (None, extract_key_comments(&key))
             };
-            let prefix = build_object_key_prefix(
-                add_structural,
-                blank_lines,
-                inline_comment.as_deref(),
-                &comments,
-                &indent,
-            );
+            let prefix = if same_line {
+                String::from(" ")
+            } else {
+                build_object_key_prefix(
+                    add_structural,
+                    blank_lines,
+                    inline_comment.as_deref(),
+                    &comments,
+                    &indent,
+                )
+            };
             key.decor_mut().set_prefix(prefix);
             normalize_terminator(&mut value, style, use_commas);
             last_terminator = value.terminator();
@@ -1480,19 +1538,24 @@ pub fn sort_top_level(body: &mut Body, style: FormatStyle) {
                             s.decor_mut().set_prefix(prefix);
                         }
                     } else {
-                        // Preserve comments, normalize spacing between top-level
-                        // blocks to one blank line.
+                        // Preserve comments; set the blank-line separator.
+                        // Opinionated normalizes spacing between top-level blocks
+                        // to one blank line. Minimal mirrors `tofu fmt`: keep the
+                        // author's exact blank-line count (which may be zero for
+                        // adjacent blocks) — forcing a blank here breaks parity.
                         let existing = s
                             .decor()
                             .prefix()
                             .map(|p| p.to_string())
                             .unwrap_or_default();
                         let comments = extract_comments(&existing);
-                        let mut prefix = String::from("\n");
-                        for comment in &comments {
-                            push_comment(&mut prefix, comment, "");
-                        }
-                        s.decor_mut().set_prefix(prefix);
+                        let blank_lines = if style.is_opinionated() {
+                            1
+                        } else {
+                            count_leading_newlines(&existing)
+                        };
+                        s.decor_mut()
+                            .set_prefix(build_body_prefix(blank_lines, &comments, ""));
                     }
                     body.push(s);
                     any_emitted = true;
