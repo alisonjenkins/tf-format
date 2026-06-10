@@ -194,10 +194,7 @@ fn stdin_rejects_positional_files() {
     // CLI level so the mistake is loud.
     let assert = tf().arg("--stdin").arg("main.tf").assert().failure();
     let stderr = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
-    assert!(
-        stderr.contains("cannot be used with"),
-        "stderr: {stderr}"
-    );
+    assert!(stderr.contains("cannot be used with"), "stderr: {stderr}");
 }
 
 #[test]

@@ -1269,8 +1269,7 @@ fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
             );
             // Minimal style preserves a comment that hugged the opening `{` on
             // the same line as the first entry (`tofu fmt` keeps it inline).
-            let (inline_comment, inline_blanks, comments) = if is_first && !style.is_opinionated()
-            {
+            let (inline_comment, inline_blanks, comments) = if is_first && !style.is_opinionated() {
                 let raw = key
                     .decor()
                     .prefix()
@@ -1309,8 +1308,7 @@ fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
         for (i, (mut key, mut value)) in multi.into_iter().enumerate() {
             let want_blank = (i > 0 || has_single) || (need_group_blank && !group_blank_emitted);
             let blank_lines = object_entry_blank_lines(style, &key, is_first, want_blank);
-            let (inline_comment, inline_blanks, comments) = if is_first && !style.is_opinionated()
-            {
+            let (inline_comment, inline_blanks, comments) = if is_first && !style.is_opinionated() {
                 let raw = key
                     .decor()
                     .prefix()
