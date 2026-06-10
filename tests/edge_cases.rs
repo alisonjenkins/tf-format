@@ -106,8 +106,8 @@ fn minimal_no_blank_inserted_between_block_and_top_level_attr() {
 #[test]
 fn non_ascii_keys_round_trip_idempotently() {
     // Multibyte identifiers/keys must survive formatting and be idempotent.
-    // (Column alignment of multibyte keys is measured in bytes today; this
-    // test pins round-tripping, not the exact padding.)
+    // (Padding correctness — rune-count alignment matching `tofu fmt` — is
+    // pinned by the `multibyte_key_alignment` minimal fixture.)
     let input = "locals {\n  obj = {\n    \u{e9}_key = 1\n    a_key  = 2\n  }\n}\n";
     let once = fmt(input);
     assert!(once.contains('\u{e9}'), "non-ASCII key was lost: {once:?}");

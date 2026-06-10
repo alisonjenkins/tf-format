@@ -94,6 +94,14 @@ fn priority_index(structure: &Structure, parent_ident: Option<&str>) -> Option<u
     }
 }
 
+/// Width of a key for `=` alignment purposes, in characters. `terraform fmt`
+/// / `tofu fmt` pad by rune count (verified empirically: `é` counts 1, `日本`
+/// counts 2 — neither byte length nor terminal display width), so multibyte
+/// keys must not be measured with `str::len`.
+fn key_width(s: &str) -> usize {
+    s.chars().count()
+}
+
 /// Extract a sort key from a structure. For attributes this is the key name,
 /// for blocks it is the ident followed by labels separated by null bytes.
 fn sort_key(structure: &Structure) -> String {
@@ -416,7 +424,7 @@ pub fn format_body(body: &mut Body, depth: usize, parent_ident: Option<&str>, st
                 format_body(&mut block.body, depth + 1, None, style);
             }
             Structure::Attribute(attr) => {
-                let prefix_width = attr.key.as_str().len() + 3; // `key = `
+                let prefix_width = key_width(attr.key.as_str()) + 3; // `key = `
                 format_expression(&mut attr.value, depth + 1, style, prefix_width);
             }
         }
@@ -996,13 +1004,13 @@ fn normalize_unaligned_attribute(s: &mut Structure) {
 fn align_body_attribute_group(structures: &mut [Structure]) {
     let max_key_len = structures
         .iter()
-        .filter_map(|s| s.as_attribute().map(|a| a.key.as_str().len()))
+        .filter_map(|s| s.as_attribute().map(|a| key_width(a.key.as_str())))
         .max()
         .unwrap_or(0);
 
     for s in structures.iter_mut() {
         if let Structure::Attribute(attr) = s {
-            let padding = max_key_len - attr.key.as_str().len() + 1;
+            let padding = max_key_len - key_width(attr.key.as_str()) + 1;
             attr.key.decor_mut().set_suffix(" ".repeat(padding));
             // Normalize whitespace after `=` to a single space, matching
             // `terraform fmt` / `tofu fmt`. The value's prefix decor holds
@@ -1069,12 +1077,12 @@ fn align_object_key_group(entries: &mut [(ObjectKey, hcl_edit::expr::ObjectValue
 fn align_equals_run(entries: &mut [(ObjectKey, hcl_edit::expr::ObjectValue)]) {
     let max_key_len = entries
         .iter()
-        .map(|(k, _)| object_key_str(k).len())
+        .map(|(k, _)| key_width(&object_key_str(k)))
         .max()
         .unwrap_or(0);
 
     for (key, value) in entries.iter_mut() {
-        let padding = max_key_len - object_key_str(key).len() + 1;
+        let padding = max_key_len - key_width(&object_key_str(key)) + 1;
         key.decor_mut().set_suffix(" ".repeat(padding));
         value.expr_mut().decor_mut().set_prefix(" ");
     }
@@ -1109,7 +1117,7 @@ fn should_expand_single_line_object(obj: &Object, depth: usize, prefix_width: us
     // Object doesn't implement Display directly; wrap it in an Expression
     // (which does) to render the single-line form for measurement.
     let rendered = Expression::Object(obj.clone()).to_string();
-    let line_width = depth * 2 + prefix_width + rendered.len();
+    let line_width = depth * 2 + prefix_width + rendered.chars().count();
     line_width > MAX_LINE_WIDTH
 }
 
@@ -1156,7 +1164,7 @@ fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
 
     // Recurse into nested values
     for (key, value) in &mut entries {
-        let prefix_width = object_key_str(key).len() + 3; // `key = `
+        let prefix_width = key_width(&object_key_str(key)) + 3; // `key = `
         format_expression(value.expr_mut(), depth + 1, style, prefix_width);
     }
 
@@ -1518,7 +1526,7 @@ pub fn sort_top_level(body: &mut Body, style: FormatStyle) {
                 format_body(&mut block.body, 0, Some(&ident), style);
             }
             Structure::Attribute(attr) => {
-                let prefix_width = attr.key.as_str().len() + 3; // `key = `
+                let prefix_width = key_width(attr.key.as_str()) + 3; // `key = `
                 format_expression(&mut attr.value, 0, style, prefix_width);
             }
         }
