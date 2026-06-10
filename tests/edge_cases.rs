@@ -155,6 +155,36 @@ fn indented_heredoc_marker_preserved_when_body_has_zero_indent_line() {
 }
 
 #[test]
+fn heredoc_marker_restore_visits_for_cond_and_index_positions() {
+    // Marker restoration pairs a text scan of `<<` / `<<-` openers with a
+    // depth-first AST walk. Expression positions the walk skipped (a for
+    // expression's `if` clause, a traversal index) desynced the pairing, so
+    // a later `<<-EOT` whose `-` hcl-edit dropped (zero-indent body line)
+    // was restored from the WRONG marker and downgraded to `<<EOT`.
+    let input = "a = [for x in y : x if x != <<EOT\nv\nEOT\n]\nb = <<-EOT\nzero\nEOT\n";
+    for opts in [FormatOptions::opinionated(), FormatOptions::minimal()] {
+        let out = format_hcl_with(input, &opts)
+            .unwrap_or_else(|e| panic!("format failed ({:?}): {e}", opts.style));
+        assert!(
+            out.contains("b = <<-EOT"),
+            "`<<-` marker lost after for-cond heredoc ({:?}): {out:?}",
+            opts.style
+        );
+    }
+
+    let input = "a = x[<<EOT\nv\nEOT\n]\nb = <<-EOT\nzero\nEOT\n";
+    for opts in [FormatOptions::opinionated(), FormatOptions::minimal()] {
+        let out = format_hcl_with(input, &opts)
+            .unwrap_or_else(|e| panic!("format failed ({:?}): {e}", opts.style));
+        assert!(
+            out.contains("b = <<-EOT"),
+            "`<<-` marker lost after index heredoc ({:?}): {out:?}",
+            opts.style
+        );
+    }
+}
+
+#[test]
 fn plain_heredoc_marker_not_promoted_to_indented() {
     // The inverse must hold: a plain `<<EOT` must never gain a `-`.
     let input = "locals {\n  x = <<EOT\nfoo\n  EOT\n}\n";

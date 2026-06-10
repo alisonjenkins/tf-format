@@ -678,6 +678,10 @@ fn restore_heredoc_in_expr(expr: &mut Expression, markers: &[bool], idx: &mut us
             // here too keeps the marker indices aligned.
         }
         Expression::Object(obj) => {
+            // Key expressions are not visited: `ObjectKeyMut` exposes no
+            // mutable access to the inner expression, and a heredoc in key
+            // position requires a parenthesized multi-line key — not valid
+            // in practice.
             for (_, value) in obj.iter_mut() {
                 restore_heredoc_in_expr(value.expr_mut(), markers, idx);
             }
@@ -700,13 +704,28 @@ fn restore_heredoc_in_expr(expr: &mut Expression, markers: &[bool], idx: &mut us
             restore_heredoc_in_expr(&mut cond.true_expr, markers, idx);
             restore_heredoc_in_expr(&mut cond.false_expr, markers, idx);
         }
-        Expression::Traversal(trav) => restore_heredoc_in_expr(&mut trav.expr, markers, idx),
+        Expression::Traversal(trav) => {
+            restore_heredoc_in_expr(&mut trav.expr, markers, idx);
+            // An index operator (`x[<<EOT ... ]`) can hold a heredoc; skipping
+            // it would desync the marker indices for every later heredoc.
+            for op in trav.operators.iter_mut() {
+                if let hcl_edit::expr::TraversalOperator::Index(index_expr) = op.value_mut() {
+                    restore_heredoc_in_expr(index_expr, markers, idx);
+                }
+            }
+        }
         Expression::ForExpr(for_expr) => {
             restore_heredoc_in_expr(&mut for_expr.intro.collection_expr, markers, idx);
             if let Some(key_expr) = &mut for_expr.key_expr {
                 restore_heredoc_in_expr(key_expr, markers, idx);
             }
             restore_heredoc_in_expr(&mut for_expr.value_expr, markers, idx);
+            // The `if` filter clause is an expression position too; missing it
+            // desynced the markers (a heredoc in the cond shifted every later
+            // heredoc's marker by one).
+            if let Some(cond) = &mut for_expr.cond {
+                restore_heredoc_in_expr(&mut cond.expr, markers, idx);
+            }
         }
         Expression::UnaryOp(op) => restore_heredoc_in_expr(&mut op.expr, markers, idx),
         Expression::BinaryOp(op) => {
@@ -902,6 +921,9 @@ fn format_expression(expr: &mut Expression, depth: usize, style: FormatStyle, pr
                 format_expression(key_expr, depth + 1, style, 0);
             }
             format_expression(&mut for_expr.value_expr, depth + 1, style, 0);
+            if let Some(cond) = &mut for_expr.cond {
+                format_expression(&mut cond.expr, depth + 1, style, 0);
+            }
         }
         Expression::UnaryOp(op) => {
             format_expression(&mut op.expr, depth, style, 0);
