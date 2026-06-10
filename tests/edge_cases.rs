@@ -203,14 +203,16 @@ fn heredoc_lookalike_inside_block_comment_is_ignored() {
         !out.contains("a = 1   "),
         "trailing whitespace kept after fake heredoc opener: {out:?}"
     );
-    assert!(out.contains("x = <<EOT"), "comment content altered: {out:?}");
+    assert!(
+        out.contains("x = <<EOT"),
+        "comment content altered: {out:?}"
+    );
     assert_eq!(fmt(&out), out, "must be idempotent");
 
     // And the marker pairing stays in sync: the real `<<-EOT` after the
     // commented-out opener keeps its `-` (zero-indent body would otherwise
     // be downgraded when paired with the fake opener's marker).
-    let input =
-        "/*\nfake = <<EOT\n*/\nlocals {\n  b = <<-EOT\nzero\nEOT\n}\n";
+    let input = "/*\nfake = <<EOT\n*/\nlocals {\n  b = <<-EOT\nzero\nEOT\n}\n";
     for opts in [FormatOptions::opinionated(), FormatOptions::minimal()] {
         let out = format_hcl_with(input, &opts)
             .unwrap_or_else(|e| panic!("format failed ({:?}): {e}", opts.style));
