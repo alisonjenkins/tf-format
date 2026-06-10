@@ -85,6 +85,22 @@ pub fn format_hcl_with(input: &str, opts: &FormatOptions) -> Result<String, Form
     // heredocs out of source order (issue #43).
     formatter::restore_heredoc_indent_markers(&mut body, &heredoc_markers);
 
+    // hcl-edit round-trips losslessly (parse → to_string is byte-identical)
+    // except where its data model cannot represent the input: an object with
+    // duplicate keys is silently collapsed at parse time (`Object` is a map),
+    // which would make formatting delete one of the user's entries. The
+    // heredoc `<<-` marker drop is the one other known structural-lossy case,
+    // and it was just restored above — so any remaining mismatch means
+    // formatting would corrupt data. Refuse instead. (Duplicate object keys
+    // are invalid Terraform anyway: `terraform validate` rejects them.)
+    //
+    // The comparison ignores `\r` because hcl-edit does not round-trip CRLF
+    // byte-identically; tf-format normalizes line endings to LF regardless,
+    // so a `\r`-only difference is never data loss.
+    if body.to_string().replace('\r', "") != input.replace('\r', "") {
+        return Err(FormatError::LossyParse);
+    }
+
     // sort_top_level handles both block ordering and top-level attribute
     // formatting (as in `.tfvars` files), recursing into nested bodies.
     formatter::sort_top_level(&mut body, opts.style);

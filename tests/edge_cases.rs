@@ -164,6 +164,30 @@ fn plain_heredoc_marker_not_promoted_to_indented() {
 }
 
 #[test]
+fn duplicate_object_keys_refuse_to_format() {
+    // hcl-edit's object model is a map, so the PARSER collapses duplicate
+    // keys — formatting used to silently emit `x = {  a = 2\n}`, deleting
+    // the user's first entry. The duplicate can't be preserved (it's gone
+    // before we see the AST), so formatting must refuse with a typed error
+    // instead of corrupting the file. (Duplicate object keys are invalid
+    // Terraform anyway — `terraform validate` rejects them.)
+    let input = "x = {\n  a = 1\n  a = 2\n}\n";
+    for opts in [FormatOptions::opinionated(), FormatOptions::minimal()] {
+        match format_hcl_with(input, &opts) {
+            Ok(out) => panic!(
+                "expected LossyParse error ({:?}), got output: {out:?}",
+                opts.style
+            ),
+            Err(e) => assert!(
+                matches!(e, FormatError::LossyParse),
+                "expected FormatError::LossyParse ({:?}), got: {e:?}",
+                opts.style
+            ),
+        }
+    }
+}
+
+#[test]
 fn invalid_hcl_returns_typed_parse_error() {
     // An unparseable input must surface a typed error, not panic.
     let err = match format_hcl("variable \"a\" {") {
