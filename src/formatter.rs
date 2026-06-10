@@ -306,20 +306,30 @@ fn build_object_key_prefix(
     prefix
 }
 
-/// Split a first-entry prefix into (inline comment hugging `{`, remaining
-/// comments). `tofu fmt` keeps a comment written on the same line as the object
-/// opening brace inline; any comments on their own lines below it move to their
-/// own lines as usual. Only the leading single-line comment qualifies as inline.
-fn split_leading_inline_comment(prefix: &str) -> (Option<String>, Vec<String>) {
+/// Split a first-entry prefix into (inline comment hugging `{`, blank lines
+/// following that comment, remaining comments). `tofu fmt` keeps a comment
+/// written on the same line as the object opening brace inline; any comments
+/// on their own lines below it move to their own lines as usual. Only the
+/// leading single-line comment qualifies as inline.
+///
+/// The blank-line count is recovered from the text after the comment's own
+/// line break: the raw prefix starts with the comment text, so the caller's
+/// leading-newline count sees zero and would otherwise drop an author blank
+/// between `{ # note` and the first entry.
+fn split_leading_inline_comment(prefix: &str) -> (Option<String>, usize, Vec<String>) {
     let first_line = prefix.lines().next().unwrap_or("").trim();
     let is_inline = first_line.starts_with('#')
         || first_line.starts_with("//")
         || (first_line.starts_with("/*") && first_line.ends_with("*/"));
     if !is_inline {
-        return (None, extract_comments(prefix));
+        return (None, 0, extract_comments(prefix));
     }
     let rest = prefix.split_once('\n').map(|(_, r)| r).unwrap_or("");
-    (Some(first_line.to_string()), extract_comments(rest))
+    (
+        Some(first_line.to_string()),
+        count_leading_newlines(rest),
+        extract_comments(rest),
+    )
 }
 
 /// Number of blank lines to emit before an object entry.
@@ -1251,7 +1261,8 @@ fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
             );
             // Minimal style preserves a comment that hugged the opening `{` on
             // the same line as the first entry (`tofu fmt` keeps it inline).
-            let (inline_comment, comments) = if is_first && !style.is_opinionated() {
+            let (inline_comment, inline_blanks, comments) = if is_first && !style.is_opinionated()
+            {
                 let raw = key
                     .decor()
                     .prefix()
@@ -1259,7 +1270,15 @@ fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
                     .unwrap_or_default();
                 split_leading_inline_comment(&raw)
             } else {
-                (None, extract_key_comments(&key))
+                (None, 0, extract_key_comments(&key))
+            };
+            // With an inline comment the raw prefix starts with the comment
+            // text, so the blank count above came back 0; use the count
+            // recovered from after the comment line.
+            let blank_lines = if inline_comment.is_some() {
+                inline_blanks
+            } else {
+                blank_lines
             };
             let prefix = if same_line {
                 String::from(" ")
@@ -1282,7 +1301,8 @@ fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
         for (i, (mut key, mut value)) in multi.into_iter().enumerate() {
             let want_blank = (i > 0 || has_single) || (need_group_blank && !group_blank_emitted);
             let blank_lines = object_entry_blank_lines(style, &key, is_first, want_blank);
-            let (inline_comment, comments) = if is_first && !style.is_opinionated() {
+            let (inline_comment, inline_blanks, comments) = if is_first && !style.is_opinionated()
+            {
                 let raw = key
                     .decor()
                     .prefix()
@@ -1290,7 +1310,12 @@ fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
                     .unwrap_or_default();
                 split_leading_inline_comment(&raw)
             } else {
-                (None, extract_key_comments(&key))
+                (None, 0, extract_key_comments(&key))
+            };
+            let blank_lines = if inline_comment.is_some() {
+                inline_blanks
+            } else {
+                blank_lines
             };
             let prefix = build_object_key_prefix(
                 is_first,

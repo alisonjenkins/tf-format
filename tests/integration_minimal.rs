@@ -196,6 +196,16 @@ fn fixture_heredoc_alignment() {
 }
 
 #[test]
+fn fixture_inline_object_comment_blank() {
+    // A comment hugging the object's opening brace (`{ # note`) stays
+    // inline, and an author blank line between it and the first entry
+    // is preserved (`tofu fmt` parity — verified against real tofu).
+    // The blank used to be dropped because the entry's raw prefix
+    // starts with the comment text, so the leading-newline count saw 0.
+    run_minimal_fixture("inline_object_comment_blank");
+}
+
+#[test]
 fn fixture_single_line_block() {
     // Single-line block bodies keep exactly ONE space after `{`,
     // byte-for-byte with `terraform fmt` (no blank-line insertion,
