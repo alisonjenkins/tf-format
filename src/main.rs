@@ -106,7 +106,12 @@ fn run(cli: &Cli) -> Result<(), CliError> {
 
         // In --check / --diff mode, stdin must not blindly emit the formatted
         // body (that would give an editor/CI integration a false OK). Report
-        // whether the input was already formatted instead.
+        // whether the input was already formatted instead. The two flags
+        // compose: --check --diff prints the diff AND fails the check.
+        if cli.diff && input != output {
+            print_diff(Path::new("<stdin>"), &input, &output);
+        }
+
         if cli.check {
             if input == output {
                 return Ok(());
@@ -115,9 +120,6 @@ fn run(cli: &Cli) -> Result<(), CliError> {
         }
 
         if cli.diff {
-            if input != output {
-                print_diff(Path::new("<stdin>"), &input, &output);
-            }
             return Ok(());
         }
 
@@ -201,12 +203,13 @@ fn process_file(
         return Ok(false);
     }
 
-    if check {
-        return Ok(true);
-    }
-
+    // --check and --diff compose: print the diff (if asked) and report the
+    // file as needing formatting; --check alone used to short-circuit and
+    // swallow the diff.
     if diff {
         print_diff(path, &input, &output);
+    }
+    if check || diff {
         return Ok(true);
     }
 

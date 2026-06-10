@@ -214,6 +214,34 @@ fn stdin_diff_reports_inserted_lines() {
 }
 
 #[test]
+fn check_with_diff_prints_diff_and_fails() {
+    let dir = tmpdir();
+    write(&dir.path().join("main.tf"), DIRTY);
+
+    // --check --diff compose: the diff is printed AND the exit code fails.
+    // --check used to short-circuit and swallow the diff.
+    let assert = tf()
+        .arg("--check")
+        .arg("--diff")
+        .arg(dir.path())
+        .assert()
+        .failure();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout).into_owned();
+    assert!(stdout.contains("@@"), "no diff printed: {stdout}");
+
+    // Same composition over stdin.
+    let assert = tf()
+        .arg("--stdin")
+        .arg("--check")
+        .arg("--diff")
+        .write_stdin(DIRTY)
+        .assert()
+        .failure();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout).into_owned();
+    assert!(stdout.contains("@@"), "no stdin diff printed: {stdout}");
+}
+
+#[test]
 fn bom_prefixed_file_is_formatted_not_errored() {
     let dir = tmpdir();
     let file = dir.path().join("main.tf");
