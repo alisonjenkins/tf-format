@@ -61,7 +61,7 @@ struct Cli {
     files: Vec<String>,
 
     /// Read from stdin, write to stdout
-    #[arg(long)]
+    #[arg(long, conflicts_with = "files")]
     stdin: bool,
 
     /// Check mode: exit 1 if any files need formatting

@@ -188,6 +188,19 @@ fn stdin_check_dirty_exits_nonzero_without_body() {
 }
 
 #[test]
+fn stdin_rejects_positional_files() {
+    // `tf-format --stdin main.tf` silently ignored main.tf — neither
+    // formatting the file nor erroring. The flags now conflict at the
+    // CLI level so the mistake is loud.
+    let assert = tf().arg("--stdin").arg("main.tf").assert().failure();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
+    assert!(
+        stderr.contains("cannot be used with"),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
 fn stdin_check_clean_exits_zero() {
     tf().arg("--stdin")
         .arg("--check")
