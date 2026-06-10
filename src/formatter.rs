@@ -1544,11 +1544,31 @@ pub fn sort_top_level(body: &mut Body, style: FormatStyle) {
     // Sort sortable block runs by label — only under the
     // opinionated style. Minimal mode preserves source order.
     if style.is_opinionated() {
-        for (kind, group) in &mut runs {
+        for (run_idx, (kind, group)) in runs.iter_mut().enumerate() {
             if let TopLevelRunKind::Block(ident) = kind
                 && matches!(ident.as_str(), "variable" | "resource" | "data" | "output")
             {
+                // A file-header comment (blank-separated from the block
+                // below it) lives in the first structure's prefix and would
+                // travel with that block when the run sorts. Detach it
+                // before sorting and re-attach to whichever block ends up
+                // first, so the header stays at the top of the file.
+                let header = if run_idx == 0 {
+                    detach_file_header(group)
+                } else {
+                    None
+                };
                 group.sort_by_key(label_sort_key);
+                if let Some(header) = header
+                    && let Some(first) = group.first_mut()
+                {
+                    let existing = first
+                        .decor()
+                        .prefix()
+                        .map(|p| p.to_string())
+                        .unwrap_or_default();
+                    first.decor_mut().set_prefix(format!("{header}{existing}"));
+                }
             }
         }
     }
@@ -1648,6 +1668,49 @@ pub fn sort_top_level(body: &mut Body, style: FormatStyle) {
     *body.decor_mut() = body_decor;
     body.set_prefer_oneline(prefer_oneline);
     body.set_prefer_omit_trailing_newline(prefer_omit_trailing_newline);
+}
+
+/// Split a "file header" off the first structure of a file-leading run.
+///
+/// A header is one or more comments separated from the structure below by a
+/// blank line (`# header\n\nvariable ...`); comments hugging the structure
+/// (no blank) are attached to it and travel with it through sorting — the
+/// documented "comments travel with their block" behaviour. The split point
+/// is the last blank line in the prefix: everything before it (if it holds
+/// any comment) is the header, the remainder stays on the structure.
+///
+/// Returns the header re-rendered (comments + one trailing blank line) and
+/// strips it from the structure's prefix. Returns `None` when there is no
+/// blank-separated comment, or when the candidate split would cut through an
+/// unterminated `/* ... */` (a block comment with an interior blank line).
+fn detach_file_header(group: &mut [Structure]) -> Option<String> {
+    let first = group.first_mut()?;
+    let prefix = first
+        .decor()
+        .prefix()
+        .map(|p| p.to_string())
+        .unwrap_or_default()
+        .replace('\r', "");
+
+    let split = prefix.rfind("\n\n")? + 2;
+    let (header_part, rest) = prefix.split_at(split);
+    let comments = extract_comments(header_part);
+    if comments.is_empty() {
+        return None;
+    }
+    // Don't split inside a block comment whose body contains a blank line.
+    if header_part.matches("/*").count() != header_part.matches("*/").count() {
+        return None;
+    }
+
+    let mut rendered = String::new();
+    for comment in &comments {
+        push_comment(&mut rendered, comment, "");
+    }
+    rendered.push('\n');
+
+    first.decor_mut().set_prefix(rest.to_string());
+    Some(rendered)
 }
 
 /// Build a sort key from a block's labels (used for top-level sorting).

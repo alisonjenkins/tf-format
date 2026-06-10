@@ -211,6 +211,15 @@ fn fixture_object_comma_normalized() {
 }
 
 #[test]
+fn fixture_file_header_stays_on_top() {
+    // A file-header comment (blank-separated from the first block) lives in
+    // that block's prefix decor, so sorting the run used to drag the header
+    // into the middle of the file with its block. The header must stay at
+    // the top; a comment hugging its block (no blank) still travels with it.
+    run_fixture("file_header_stays_on_top");
+}
+
+#[test]
 fn fixture_object_inline_comments() {
     // Regression: an inline comment trailing an object entry's value
     // (`a = 1 # note`) lives in the value's suffix decor; terminator
