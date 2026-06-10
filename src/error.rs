@@ -6,6 +6,13 @@ use std::path::PathBuf;
 pub enum FormatError {
     #[error("failed to parse HCL input: {0}")]
     ParseHcl(#[from] hcl_edit::parser::Error),
+
+    #[error(
+        "input cannot be formatted without data loss \
+         (an object with duplicate keys collapses at parse time); \
+         remove the duplicate object keys and retry"
+    )]
+    LossyParse,
 }
 
 #[derive(Debug, thiserror::Error)]
