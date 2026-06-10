@@ -211,6 +211,16 @@ fn fixture_object_comma_normalized() {
 }
 
 #[test]
+fn fixture_object_inline_comments() {
+    // Regression: an inline comment trailing an object entry's value
+    // (`a = 1 # note`) lives in the value's suffix decor; terminator
+    // normalization used to wipe that suffix, deleting the comment
+    // (Rule 7 violation). Comments must survive the sort and stay on
+    // their entry's line.
+    run_fixture("object_inline_comments");
+}
+
+#[test]
 fn fixture_block_comments() {
     // BUG-1 regression: multi-line `/* ... */` block comments must
     // survive reordering intact — over a reordered attribute, over a
