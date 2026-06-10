@@ -979,14 +979,14 @@ fn align_body_attributes(structures: &mut [Structure]) {
 /// Normalize the `=` spacing of an attribute that is *not* part of an `=`
 /// alignment run — a multi-line value (object/array/func-call spanning lines)
 /// breaks the run, so its `=` gets a single space on each side rather than
-/// column padding, matching `terraform fmt` / `tofu fmt`. Heredocs keep their
-/// `=` on the opening line and stay inside the run, so they are left untouched
-/// here. No-op on blocks.
+/// column padding, matching `terraform fmt` / `tofu fmt`. No-op on blocks.
+///
+/// Heredoc attributes reach this only on the opinionated multi-tier path
+/// (minimal mode keeps them inside alignment runs and never routes them
+/// here); they get the same single-space normalization so stale padding
+/// from the source (`foo       = <<EOT`) doesn't survive.
 fn normalize_unaligned_attribute(s: &mut Structure) {
     if let Structure::Attribute(attr) = s {
-        if is_heredoc_expr(&attr.value) {
-            return;
-        }
         attr.key.decor_mut().set_suffix(" ");
         attr.value.decor_mut().set_prefix(" ");
     }

@@ -253,6 +253,21 @@ fn heredoc_marker_restore_visits_for_cond_and_index_positions() {
 }
 
 #[test]
+fn opinionated_normalizes_stale_heredoc_padding() {
+    // Opinionated mode places heredoc attributes in the multi-line tier,
+    // outside any `=` alignment run — so source padding like
+    // `foo       = <<EOT` used to survive verbatim, making the output
+    // depend on the input's formatting. It must normalize to one space.
+    let input = "resource \"a\" \"b\" {\n  foo       = <<EOT\nhi\nEOT\n  bar = 1\n}\n";
+    let out = fmt(input);
+    assert!(
+        out.contains("foo = <<EOT"),
+        "stale heredoc `=` padding survived: {out:?}"
+    );
+    assert_eq!(fmt(&out), out, "must be idempotent");
+}
+
+#[test]
 fn plain_heredoc_marker_not_promoted_to_indented() {
     // The inverse must hold: a plain `<<EOT` must never gain a `-`.
     let input = "locals {\n  x = <<EOT\nfoo\n  EOT\n}\n";
