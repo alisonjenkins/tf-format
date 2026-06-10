@@ -87,6 +87,23 @@ fn crlf_blank_lines_split_alignment_groups_in_minimal() {
 }
 
 #[test]
+fn minimal_no_blank_inserted_between_block_and_top_level_attr() {
+    // `tofu fmt` preserves the author's blank-line count exactly — zero
+    // blanks between a block and a following top-level attribute stay zero.
+    // The top-level attr-run handling used to force one blank in.
+    let input = "locals {\n  a = 1\n}\nfoo = \"bar\"\n";
+    let out = format_hcl_with(input, &FormatOptions::minimal())
+        .unwrap_or_else(|e| panic!("minimal format failed: {e}"));
+    assert_eq!(out, input, "minimal must be a no-op here (tofu parity)");
+
+    // An author-written blank is still preserved, not collapsed.
+    let input_blank = "locals {\n  a = 1\n}\n\nfoo = \"bar\"\n";
+    let out_blank = format_hcl_with(input_blank, &FormatOptions::minimal())
+        .unwrap_or_else(|e| panic!("minimal format failed: {e}"));
+    assert_eq!(out_blank, input_blank, "author blank must be preserved");
+}
+
+#[test]
 fn non_ascii_keys_round_trip_idempotently() {
     // Multibyte identifiers/keys must survive formatting and be idempotent.
     // (Column alignment of multibyte keys is measured in bytes today; this

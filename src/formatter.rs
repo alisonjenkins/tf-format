@@ -1544,7 +1544,16 @@ pub fn sort_top_level(body: &mut Body, style: FormatStyle) {
                     split_body_groups(group)
                 };
                 for (sub_idx, sub_group) in sub_groups.into_iter().enumerate() {
-                    let want_group_blank = (any_emitted && sub_idx == 0) || sub_idx > 0;
+                    // Minimal mode never forces a blank here: each structure's
+                    // prefix already carries the author's exact blank-line
+                    // count (`tofu fmt` doesn't insert a blank between a block
+                    // and a following top-level attribute). Opinionated mode
+                    // normalizes run/group boundaries to one blank line.
+                    let want_group_blank = if style.is_opinionated() {
+                        (any_emitted && sub_idx == 0) || sub_idx > 0
+                    } else {
+                        false
+                    };
                     any_emitted = format_structure_group(
                         body,
                         sub_group,
