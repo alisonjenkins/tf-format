@@ -155,6 +155,38 @@ fn indented_heredoc_marker_preserved_when_body_has_zero_indent_line() {
 }
 
 #[test]
+fn heredoc_lookalike_inside_block_comment_is_ignored() {
+    // A `x = <<EOT` line inside a `/* … */` block comment is comment text,
+    // not a heredoc opener. The text scanners used to take it literally:
+    // post_process treated the following lines as a heredoc body (keeping
+    // trailing whitespace — Rule 8 violation) and the marker scan desynced,
+    // restoring `<<-` markers onto the wrong heredoc.
+    let input = "locals {\n  /*\n  x = <<EOT\n  */\n  a = 1   \n  b = 22\n}\n";
+    let out = fmt(input);
+    assert!(
+        !out.contains("a = 1   "),
+        "trailing whitespace kept after fake heredoc opener: {out:?}"
+    );
+    assert!(out.contains("x = <<EOT"), "comment content altered: {out:?}");
+    assert_eq!(fmt(&out), out, "must be idempotent");
+
+    // And the marker pairing stays in sync: the real `<<-EOT` after the
+    // commented-out opener keeps its `-` (zero-indent body would otherwise
+    // be downgraded when paired with the fake opener's marker).
+    let input =
+        "/*\nfake = <<EOT\n*/\nlocals {\n  b = <<-EOT\nzero\nEOT\n}\n";
+    for opts in [FormatOptions::opinionated(), FormatOptions::minimal()] {
+        let out = format_hcl_with(input, &opts)
+            .unwrap_or_else(|e| panic!("format failed ({:?}): {e}", opts.style));
+        assert!(
+            out.contains("<<-EOT"),
+            "`<<-` marker lost after commented-out opener ({:?}): {out:?}",
+            opts.style
+        );
+    }
+}
+
+#[test]
 fn heredoc_marker_restore_visits_for_cond_and_index_positions() {
     // Marker restoration pairs a text scan of `<<` / `<<-` openers with a
     // depth-first AST walk. Expression positions the walk skipped (a for

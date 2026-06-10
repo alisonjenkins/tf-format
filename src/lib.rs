@@ -126,6 +126,7 @@ fn post_process(output: &str, style: FormatStyle) -> String {
 
     let mut lines_out: Vec<String> = Vec::new();
     let mut heredoc_delim: Option<String> = None;
+    let mut in_block_comment = false;
     // Blank lines seen outside a heredoc, held back until we know whether the
     // next non-blank line is a closing bracket (in which case they're dropped).
     let mut pending_blanks: Vec<String> = Vec::new();
@@ -144,14 +145,16 @@ fn post_process(output: &str, style: FormatStyle) -> String {
                 }
             }
             // Outside a heredoc: strip trailing whitespace, then check whether
-            // this line opens a heredoc.
+            // this line opens a heredoc. Detection runs on the comment-masked
+            // line so `<<` / `}` inside comments never match.
             None => {
+                let masked = mask_comments(line, &mut in_block_comment);
                 let trimmed = line.trim_end();
                 if trimmed.is_empty() {
                     pending_blanks.push(String::new());
                 } else {
                     let starts_close = {
-                        let t = trimmed.trim_start();
+                        let t = masked.trim_start();
                         t.starts_with('}') || t.starts_with(']')
                     };
                     if strip_before_close && starts_close {
@@ -160,7 +163,7 @@ fn post_process(output: &str, style: FormatStyle) -> String {
                         lines_out.append(&mut pending_blanks);
                     }
                     lines_out.push(trimmed.to_string());
-                    heredoc_delim = heredoc_open_delimiter(line);
+                    heredoc_delim = heredoc_open_delimiter(&masked);
                 }
             }
         }
@@ -177,13 +180,85 @@ fn post_process(output: &str, style: FormatStyle) -> String {
     result
 }
 
+/// Blank out the comment portions of `line` so heredoc-opener detection never
+/// matches a `<<` inside a comment. `/* … */` block comments span lines, so
+/// the caller threads `in_block_comment` through consecutive calls; line
+/// comments (`#`, `//`) mask to end of line. Quoted strings are honoured (a
+/// comment marker inside `"…"` is content, not a comment) — strings cannot
+/// span lines outside heredocs, so per-line string state is sound. Characters
+/// outside comments are copied verbatim, so indices into the masked line are
+/// valid for the non-comment content.
+///
+/// Without this, a heredoc-looking line inside a block comment desynced the
+/// marker scan (wrong `<<-` restoration) and made `post_process` treat the
+/// following lines as a heredoc body (trailing whitespace kept, Rule 8
+/// violation).
+fn mask_comments(line: &str, in_block_comment: &mut bool) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut iter = line.chars().peekable();
+    let mut in_string = false;
+
+    while let Some(c) = iter.next() {
+        if *in_block_comment {
+            if c == '*' && iter.peek() == Some(&'/') {
+                iter.next();
+                *in_block_comment = false;
+                out.push_str("  ");
+            } else {
+                out.push(' ');
+            }
+            continue;
+        }
+        if in_string {
+            out.push(c);
+            match c {
+                '\\' => {
+                    if let Some(escaped) = iter.next() {
+                        out.push(escaped);
+                    }
+                }
+                '"' => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+        match c {
+            '"' => {
+                in_string = true;
+                out.push(c);
+            }
+            '#' => {
+                out.push(' ');
+                for _ in iter.by_ref() {
+                    out.push(' ');
+                }
+            }
+            '/' if iter.peek() == Some(&'/') => {
+                out.push(' ');
+                for _ in iter.by_ref() {
+                    out.push(' ');
+                }
+            }
+            '/' if iter.peek() == Some(&'*') => {
+                iter.next();
+                *in_block_comment = true;
+                out.push_str("  ");
+            }
+            _ => out.push(c),
+        }
+    }
+
+    out
+}
+
 /// If `line` opens a heredoc, return its delimiter (the identifier after
 /// `<<` / `<<-`). Returns `None` otherwise.
 ///
 /// A heredoc opener has nothing but whitespace after the delimiter on the
 /// opening line, so we require that to avoid false positives like a `<<` that
 /// appears inside a string literal. `<<` occurring after a line comment marker
-/// is also ignored.
+/// is also ignored. Callers pass a line pre-masked by [`mask_comments`] so
+/// block-comment content never matches.
 fn heredoc_open_delimiter(line: &str) -> Option<String> {
     let idx = line.find("<<")?;
 
@@ -221,6 +296,7 @@ fn heredoc_open_delimiter(line: &str) -> Option<String> {
 fn scan_heredoc_markers(input: &str) -> Vec<bool> {
     let mut markers = Vec::new();
     let mut heredoc_delim: Option<String> = None;
+    let mut in_block_comment = false;
 
     for line in input.lines() {
         match &heredoc_delim {
@@ -230,9 +306,10 @@ fn scan_heredoc_markers(input: &str) -> Vec<bool> {
                 }
             }
             None => {
-                if let Some(delim) = heredoc_open_delimiter(line) {
-                    if let Some(idx) = line.find("<<") {
-                        markers.push(line[idx + 2..].starts_with('-'));
+                let masked = mask_comments(line, &mut in_block_comment);
+                if let Some(delim) = heredoc_open_delimiter(&masked) {
+                    if let Some(idx) = masked.find("<<") {
+                        markers.push(masked[idx + 2..].starts_with('-'));
                     }
                     heredoc_delim = Some(delim);
                 }
