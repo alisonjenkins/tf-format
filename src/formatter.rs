@@ -1321,7 +1321,17 @@ fn normalize_terminator(
     style: FormatStyle,
     use_commas: bool,
 ) {
-    if style.is_opinionated() {
+    if !style.is_opinionated() {
+        return;
+    }
+    let suffix = value
+        .expr()
+        .decor()
+        .suffix()
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+    let comments = extract_comments(&suffix);
+    if comments.is_empty() {
         // Clear any trailing whitespace decor on the value (e.g. the space a
         // just-expanded inline object carried before its closing `}`), so a
         // comma terminator renders as `4,` rather than `4 ,`.
@@ -1331,6 +1341,18 @@ fn normalize_terminator(
         } else {
             ObjectValueTerminator::Newline
         });
+    } else {
+        // The suffix carries an inline comment (`a = 1 # note`). Keep the
+        // comment — clearing the suffix deleted it (Rule 7 violation). The
+        // entry is newline-terminated even in a comma-style object: a comma
+        // emitted after a line comment would be swallowed into the comment.
+        let mut kept = String::new();
+        for comment in &comments {
+            kept.push(' ');
+            kept.push_str(comment);
+        }
+        value.expr_mut().decor_mut().set_suffix(kept);
+        value.set_terminator(ObjectValueTerminator::Newline);
     }
 }
 
