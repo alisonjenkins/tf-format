@@ -206,6 +206,15 @@ fn fixture_inline_object_comment_blank() {
 }
 
 #[test]
+fn fixture_multibyte_key_alignment() {
+    // `tofu fmt` pads `=` alignment by RUNE COUNT (`é` is 1, `日本` is 2 —
+    // not byte length, not display width). The expected output is real
+    // `tofu fmt` output captured verbatim. Byte-based padding misaligned
+    // every multibyte key.
+    run_minimal_fixture("multibyte_key_alignment");
+}
+
+#[test]
 fn fixture_single_line_block() {
     // Single-line block bodies keep exactly ONE space after `{`,
     // byte-for-byte with `terraform fmt` (no blank-line insertion,

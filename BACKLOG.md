@@ -55,10 +55,11 @@ lines** (violated Rule #8, broke idempotence) — fixed in `b624d5d`.
   `crlf_is_normalized_to_lf_and_idempotent` as deliberate behaviour for now. Minor
   minimal-mode parity gap.
 
-- **Multibyte-key `=` alignment is measured in bytes, not display columns.** A key like
-  `é` (2 bytes, 1 column) misaligns against ASCII keys in the same group. `tofu fmt`
-  aligns by column, so this is a minor minimal-mode parity gap. Pinned for round-tripping
-  only by `non_ascii_keys_round_trip_idempotently`; padding correctness is open.
+- ~~**Multibyte-key `=` alignment is measured in bytes, not display columns.**~~ ✅ fixed.
+  `tofu fmt` turns out to pad by RUNE COUNT (`é` = 1, `日本` = 2 — neither bytes nor
+  display width; verified empirically 2026-06-11). All alignment/width sites now measure
+  `chars().count()`. Pinned byte-for-byte against real tofu output by the
+  `multibyte_key_alignment` minimal fixture.
 - **Pre-existing clippy `unnecessary_sort_by` warnings** at `formatter.rs:819-820`
   (object key sort) — harmless, could switch to `sort_by_key`.
 
