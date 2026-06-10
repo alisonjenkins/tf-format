@@ -48,6 +48,13 @@ lines** (violated Rule #8, broke idempotence) — fixed in `b624d5d`.
   `heredoc_preserved` minimal fixture was restored to its richer form and a dedicated
   `heredoc_alignment` fixture added.
 
+- **CRLF line endings are normalized to LF; `tofu fmt` preserves them verbatim.**
+  Verified against real `tofu fmt` (2026-06-11): a CRLF file round-trips with CRLF intact
+  under tofu, while tf-format (both styles) emits LF. Full preservation would need
+  line-ending tracking through `post_process` and every decor rebuild; pinned by
+  `crlf_is_normalized_to_lf_and_idempotent` as deliberate behaviour for now. Minor
+  minimal-mode parity gap.
+
 - **Multibyte-key `=` alignment is measured in bytes, not display columns.** A key like
   `é` (2 bytes, 1 column) misaligns against ASCII keys in the same group. `tofu fmt`
   aligns by column, so this is a minor minimal-mode parity gap. Pinned for round-tripping

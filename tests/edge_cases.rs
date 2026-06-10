@@ -68,6 +68,25 @@ fn crlf_is_normalized_to_lf_and_idempotent() {
 }
 
 #[test]
+fn crlf_blank_lines_split_alignment_groups_in_minimal() {
+    // A blank line in CRLF input is `\r\n\r\n` in the decor. The blank-line
+    // predicates only looked for `\n`-shaped patterns, so the two groups
+    // below merged into one alignment run and `a` was padded to align with
+    // `bb` — `tofu fmt` aligns the blank-separated groups independently.
+    let input = "locals {\r\n  a = 1\r\n\r\n  bb = 2\r\n}\r\n";
+    let out = format_hcl_with(input, &FormatOptions::minimal())
+        .unwrap_or_else(|e| panic!("minimal format failed: {e}"));
+    assert!(
+        out.contains("  a = 1\n"),
+        "`a` was padded across a CRLF blank line: {out:?}"
+    );
+    assert!(out.contains("  bb = 2\n"), "second group altered: {out:?}");
+    let twice = format_hcl_with(&out, &FormatOptions::minimal())
+        .unwrap_or_else(|e| panic!("second minimal format failed: {e}"));
+    assert_eq!(twice, out, "must be idempotent");
+}
+
+#[test]
 fn non_ascii_keys_round_trip_idempotently() {
     // Multibyte identifiers/keys must survive formatting and be idempotent.
     // (Column alignment of multibyte keys is measured in bytes today; this
