@@ -137,13 +137,16 @@ fn object_key_str(key: &ObjectKey) -> String {
 /// there is no automatic newline, so a single leading `\n` is just the
 /// line-break and a blank line requires `\n\n`.
 fn has_blank_line_after_newline_terminator(prefix: &str) -> bool {
+    // CRLF input stores `\r\n` in decor; strip the `\r` so a blank line is
+    // recognised either way (output is LF-normalized downstream regardless).
+    let prefix = prefix.replace('\r', "");
     prefix.starts_with('\n') || prefix.contains("\n\n")
 }
 
 /// Detect a blank line in a prefix when the previous entry may use a
 /// non-Newline terminator (e.g. Comma). Only `\n\n` counts.
 fn has_blank_line_after_other_terminator(prefix: &str) -> bool {
-    prefix.contains("\n\n")
+    prefix.replace('\r', "").contains("\n\n")
 }
 
 /// Count the leading newlines a decor prefix encodes, treating whitespace-only
