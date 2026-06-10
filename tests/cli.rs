@@ -99,6 +99,40 @@ fn nonexistent_literal_path_errors() {
 }
 
 #[test]
+fn no_args_defaults_to_current_directory() {
+    let dir = tmpdir();
+    write(&dir.path().join("main.tf"), DIRTY);
+
+    // A bare `tf-format --check` must check the cwd (like `terraform fmt`),
+    // not silently exit 0 with nothing to do — that footgun let a
+    // misconfigured CI step pass forever.
+    let assert = tf()
+        .arg("--check")
+        .current_dir(dir.path())
+        .assert()
+        .failure();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
+    assert!(stderr.contains("main.tf"), "stderr: {stderr}");
+}
+
+#[test]
+fn glob_matching_nothing_errors() {
+    let dir = tmpdir();
+    write(&dir.path().join("main.tf"), "variable \"a\" {}\n");
+
+    // A glob that matches no files is a typo'd or stale pattern; it must
+    // fail loudly instead of passing `--check` with zero work done.
+    let assert = tf()
+        .arg("--check")
+        .arg("nope/**/*.tf")
+        .current_dir(dir.path())
+        .assert()
+        .failure();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
+    assert!(stderr.contains("matched no files"), "stderr: {stderr}");
+}
+
+#[test]
 fn clean_file_passes_check() {
     let dir = tmpdir();
     // Already canonical: single var, nothing to reorder or align.

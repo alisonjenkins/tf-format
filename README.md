@@ -85,7 +85,8 @@ tf-format main.tf variables.tf
 # Format all .tf/.tofu/.tfvars/.tftest.hcl files in a directory (recursive)
 tf-format .
 
-# Check if files are formatted (for CI pipelines, exits 1 if changes needed)
+# Check if files are formatted (for CI pipelines, exits 1 if changes needed).
+# With no paths given, tf-format defaults to the current directory.
 tf-format --check .
 
 # Print diff without writing

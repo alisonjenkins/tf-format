@@ -57,7 +57,7 @@ impl From<StyleArg> for FormatStyle {
     about = "Opinionated Terraform/OpenTofu HCL formatter"
 )]
 struct Cli {
-    /// Files, glob patterns, or directories to format
+    /// Files, glob patterns, or directories to format [default: .]
     files: Vec<String>,
 
     /// Read from stdin, write to stdout
@@ -128,7 +128,15 @@ fn run(cli: &Cli) -> Result<(), CliError> {
         return Ok(());
     }
 
-    let paths = discover_files(&cli.files)?;
+    // No paths means "the current directory", like `terraform fmt` — so a
+    // bare `tf-format --check` in CI actually checks something instead of
+    // silently passing with nothing to do.
+    let inputs: Vec<String> = if cli.files.is_empty() {
+        vec![String::from(".")]
+    } else {
+        cli.files.clone()
+    };
+    let paths = discover_files(&inputs)?;
 
     if paths.is_empty() {
         eprintln!("No .tf, .tofu, or .tfvars files found");
@@ -261,11 +269,20 @@ fn discover_files(inputs: &[String]) -> Result<Vec<PathBuf>, DiscoverFilesError>
                 source,
             })?;
 
+            let before = paths.len();
             for entry in entries {
                 let path = entry?;
                 if path.is_file() {
                     paths.push(path);
                 }
+            }
+            // A pattern that matches no files is a typo'd or stale glob; fail
+            // loudly like the literal-path case so it can't silently pass
+            // `--check` in CI.
+            if paths.len() == before {
+                return Err(DiscoverFilesError::GlobNoMatches {
+                    pattern: input.clone(),
+                });
             }
         } else {
             // A literal path (no glob metacharacters) that is neither a file

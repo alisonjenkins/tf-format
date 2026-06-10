@@ -60,6 +60,9 @@ pub enum DiscoverFilesError {
 
     #[error("path '{}' does not exist", path.display())]
     PathNotFound { path: PathBuf },
+
+    #[error("glob pattern '{pattern}' matched no files")]
+    GlobNoMatches { pattern: String },
 }
 
 #[derive(Debug, thiserror::Error)]
