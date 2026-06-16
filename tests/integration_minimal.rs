@@ -50,6 +50,14 @@ fn fixture_no_meta_hoisting() {
 }
 
 #[test]
+fn fixture_dynamic_preserved() {
+    // Issue #55 is opinionated-only: a `dynamic` block with `content`
+    // written before `for_each` must keep that author order under minimal
+    // style — no meta-arg hoisting leaks through.
+    run_minimal_fixture("dynamic_preserved");
+}
+
+#[test]
 fn fixture_leading_comments_preserved() {
     // P0 (data loss): a file's leading comments + the blank line after them
     // must survive minimal formatting. The top-level flattener used to clear

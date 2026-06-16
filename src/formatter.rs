@@ -38,9 +38,11 @@ impl FormatStyle {
 /// Per-block-type priority lists. Hoisting is block-type-aware: an attribute
 /// is only treated as a priority (meta-argument) inside the block types where
 /// it is actually a meta-argument. Nested blocks — anything below a top-level
-/// block — get no hoisting at all (`None`).
+/// block — get no hoisting, with the sole exception of `dynamic` (see
+/// [`nested_hoist_ident`]), whose iteration args are hoisted at any depth.
 ///
-/// See <https://github.com/alisonjenkins/tf-format/issues/30>.
+/// See <https://github.com/alisonjenkins/tf-format/issues/30> and
+/// <https://github.com/alisonjenkins/tf-format/issues/55>.
 fn priorities_for_block(ident: &str) -> (&'static [&'static str], &'static [&'static str]) {
     match ident {
         // resource / data / ephemeral / action share the same meta-args.
@@ -66,7 +68,25 @@ fn priorities_for_block(ident: &str) -> (&'static [&'static str], &'static [&'st
         // it under both is harmless — `for_each` won't appear in a TF provider
         // block in valid config.
         "provider" => (&["for_each"], &[]),
+        // `dynamic` has four defined arguments: `for_each` / `iterator` /
+        // `labels` configure the iteration; `content` is the body. Hoist the
+        // iteration args ahead of `content` (issue #55). `content` is the only
+        // legal nested block, so the priority-tier-before-normal-tier emission
+        // order already places it last — no need to list it as a priority block.
+        "dynamic" => (&["for_each", "iterator", "labels"], &[]),
         _ => (&[], &[]),
+    }
+}
+
+/// Block idents whose body keeps meta-argument hoisting even though they sit
+/// below the top level. `dynamic` is the sole case: its `for_each` /
+/// `iterator` / `labels` are meta-arguments (issue #55). Applied uniformly at
+/// every depth, so a `dynamic` nested inside another `dynamic`'s `content` is
+/// also covered.
+fn nested_hoist_ident(ident: &str) -> Option<&'static str> {
+    match ident {
+        "dynamic" => Some("dynamic"),
+        _ => None,
     }
 }
 
@@ -74,8 +94,9 @@ fn priorities_for_block(ident: &str) -> (&'static [&'static str], &'static [&'st
 ///
 /// `parent_ident` is the identifier of the block whose body this structure
 /// lives directly inside (`Some("resource")`, `Some("module")`, ...). `None`
-/// means "no hoisting applies" — used for nested blocks at depth ≥ 1 and for
-/// top-level attribute runs (tfvars-style files).
+/// means "no hoisting applies" — used for most nested blocks at depth ≥ 1
+/// (the `dynamic` exception passes `Some("dynamic")`) and for top-level
+/// attribute runs (tfvars-style files).
 fn priority_index(structure: &Structure, parent_ident: Option<&str>) -> Option<usize> {
     let ident = parent_ident?;
     let (attrs, blocks) = priorities_for_block(ident);
@@ -416,12 +437,15 @@ pub fn format_body(body: &mut Body, depth: usize, parent_ident: Option<&str>, st
     let old_body = std::mem::take(body);
     let mut structures: Vec<Structure> = old_body.into_iter().collect();
 
-    // Recurse into nested blocks and expressions. Nested blocks always pass
-    // `None` for parent_ident — hoisting is suppressed below the top level.
+    // Recurse into nested blocks and expressions. Nested blocks normally pass
+    // `None` for parent_ident — hoisting is suppressed below the top level —
+    // except `dynamic`, whose iteration args are hoisted at any depth
+    // (`nested_hoist_ident`).
     for structure in &mut structures {
         match structure {
             Structure::Block(block) => {
-                format_body(&mut block.body, depth + 1, None, style);
+                let nested_parent = nested_hoist_ident(block.ident.as_str());
+                format_body(&mut block.body, depth + 1, nested_parent, style);
             }
             Structure::Attribute(attr) => {
                 let prefix_width = key_width(attr.key.as_str()) + 3; // `key = `
