@@ -1295,29 +1295,41 @@ fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
                 !is_first && !prev_was_newline && had_source_newline
             };
             let add_structural = is_first || needs_leading_newline;
+            // A comment on the first physical line of an entry's prefix is an
+            // inline trailing comment of the PREVIOUS entry — the ` # note`
+            // that followed its comma terminator (a comma ends the value, so
+            // anything after it parses into the next entry's prefix) — or, for
+            // the first entry under minimal, a comment hugging the opening `{`.
+            // Split it out so it renders inline on the previous line instead of
+            // being dropped by the same-line collapse or relocated to its own
+            // line. (Issue #53.)
+            let prev_was_comma = !is_first && !prev_was_newline;
+            let (inline_comment, inline_blanks, comments) =
+                if (is_first && !style.is_opinionated()) || prev_was_comma {
+                    let raw = key
+                        .decor()
+                        .prefix()
+                        .map(|p| p.to_string())
+                        .unwrap_or_default();
+                    split_leading_inline_comment(&raw)
+                } else {
+                    (None, 0, extract_key_comments(&key))
+                };
             // Minimal: an entry the author kept on the previous entry's line
             // (comma terminator, no newline before it) gets a single space
-            // after the comma — no newline/indent.
-            let same_line =
-                !style.is_opinionated() && !is_first && !prev_was_newline && !had_source_newline;
+            // after the comma — but only when there is no inline comment to
+            // carry, since the comment supplies its own line break.
+            let same_line = !style.is_opinionated()
+                && !is_first
+                && !prev_was_newline
+                && !had_source_newline
+                && inline_comment.is_none();
             let blank_lines = object_entry_blank_lines(
                 style,
                 &key,
                 add_structural,
                 need_group_blank && !group_blank_emitted,
             );
-            // Minimal style preserves a comment that hugged the opening `{` on
-            // the same line as the first entry (`tofu fmt` keeps it inline).
-            let (inline_comment, inline_blanks, comments) = if is_first && !style.is_opinionated() {
-                let raw = key
-                    .decor()
-                    .prefix()
-                    .map(|p| p.to_string())
-                    .unwrap_or_default();
-                split_leading_inline_comment(&raw)
-            } else {
-                (None, 0, extract_key_comments(&key))
-            };
             // With an inline comment the raw prefix starts with the comment
             // text, so the blank count above came back 0; use the count
             // recovered from after the comment line.
@@ -1347,16 +1359,22 @@ fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
         for (i, (mut key, mut value)) in multi.into_iter().enumerate() {
             let want_blank = (i > 0 || has_single) || (need_group_blank && !group_blank_emitted);
             let blank_lines = object_entry_blank_lines(style, &key, is_first, want_blank);
-            let (inline_comment, inline_blanks, comments) = if is_first && !style.is_opinionated() {
-                let raw = key
-                    .decor()
-                    .prefix()
-                    .map(|p| p.to_string())
-                    .unwrap_or_default();
-                split_leading_inline_comment(&raw)
-            } else {
-                (None, 0, extract_key_comments(&key))
-            };
+            // As in the single-line loop: a comment on the first line of the
+            // prefix is an inline trailing comment of the previous (comma-
+            // terminated) entry, or the first entry's `{`-hugging comment. (#53.)
+            let prev_was_comma =
+                !is_first && !matches!(last_terminator, ObjectValueTerminator::Newline);
+            let (inline_comment, inline_blanks, comments) =
+                if (is_first && !style.is_opinionated()) || prev_was_comma {
+                    let raw = key
+                        .decor()
+                        .prefix()
+                        .map(|p| p.to_string())
+                        .unwrap_or_default();
+                    split_leading_inline_comment(&raw)
+                } else {
+                    (None, 0, extract_key_comments(&key))
+                };
             let blank_lines = if inline_comment.is_some() {
                 inline_blanks
             } else {
@@ -1390,7 +1408,14 @@ fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
         // (added here when the last terminator didn't already supply one).
         match last_terminator {
             ObjectValueTerminator::Newline => closing_indent,
-            _ => format!("\n{closing_indent}"),
+            // After a comma-terminated last entry, a comment on the first line
+            // of the original trailing is that entry's inline trailing comment
+            // (`q = 2, # note`). Preserve it on the entry's line rather than
+            // discarding the trailing wholesale. (Issue #53.)
+            _ => match split_leading_inline_comment(&old_trailing).0 {
+                Some(comment) => format!(" {comment}\n{closing_indent}"),
+                None => format!("\n{closing_indent}"),
+            },
         }
     } else {
         // Minimal (`tofu fmt` parity): preserve the original blank lines before
