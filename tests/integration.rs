@@ -315,3 +315,13 @@ fn fixture_dynamic_meta_arguments() {
     // iteration args, and a `dynamic` nested inside another's `content`.
     run_fixture("dynamic_meta_arguments");
 }
+
+#[test]
+fn fixture_map_trailing_commas_normalized() {
+    // Issue #54: a multi-line-value map/object is normalised to no trailing
+    // commas with a blank line between entries, regardless of whether the
+    // author wrote trailing commas — so structurally identical maps format
+    // identically. Covers the comma and no-comma forms converging, plus a
+    // mixed single-line/multi-line-entry map.
+    run_fixture("map_trailing_commas_normalized");
+}

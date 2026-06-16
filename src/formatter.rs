@@ -1178,19 +1178,34 @@ fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
     let old_trailing = old_obj.trailing().to_string();
     let mut entries: Vec<(ObjectKey, hcl_edit::expr::ObjectValue)> = old_obj.into_iter().collect();
 
-    // Decide the canonical terminator before sorting can shuffle a no-comma
-    // entry into the middle of comma-terminated ones. `tofu fmt` preserves the
-    // object's comma style, so we mirror it: if the object used commas at all,
-    // normalize every entry to a comma; otherwise newline-terminate them.
-    let use_commas = entries
-        .iter()
-        .any(|(_, v)| matches!(v.terminator(), ObjectValueTerminator::Comma));
-
-    // Recurse into nested values
+    // Recurse into nested values first, so the multi-line check below sees the
+    // formatted (possibly expanded) values — matching the single/multi
+    // partition predicate further down.
     for (key, value) in &mut entries {
         let prefix_width = key_width(&object_key_str(key)) + 3; // `key = `
         format_expression(value.expr_mut(), depth + 1, style, prefix_width);
     }
+
+    // Decide the canonical terminator before sorting can shuffle a no-comma
+    // entry into the middle of comma-terminated ones. `tofu fmt` preserves the
+    // object's comma style, so we mirror it: if the object used commas at all,
+    // normalize every entry to a comma; otherwise newline-terminate them.
+    //
+    // Exception (issue #54): under the opinionated style a multi-line object —
+    // one with any entry whose value spans lines — is treated like
+    // object/body entries: newline-separated, no trailing commas, blank line
+    // between entries, regardless of the input's comma usage. Only a fully
+    // single-line-valued object keeps its commas (they are inline separators;
+    // stripping them would explode the object across lines). This makes
+    // structurally identical maps format identically whether or not the author
+    // wrote trailing commas. Minimal mode is untouched (`tofu fmt` parity).
+    let any_multiline_value = entries
+        .iter()
+        .any(|(_, v)| v.expr().to_string().contains('\n'));
+    let use_commas = entries
+        .iter()
+        .any(|(_, v)| matches!(v.terminator(), ObjectValueTerminator::Comma))
+        && !(style.is_opinionated() && any_multiline_value);
 
     // Opinionated style: rewrite every `:` separator to `=`
     // BEFORE alignment, so the whole object renders in the

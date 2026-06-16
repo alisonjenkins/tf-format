@@ -253,6 +253,13 @@ fn parity_object_of_objects_with_trailing_commas() {
     // `},  }`) because the trailing decoration was just whitespace, with
     // no newline. The terminator-aware fix now prepends `\n` when the last
     // entry's terminator isn't already a newline.
+    //
+    // Checked under MINIMAL style: opinionated mode intentionally strips the
+    // trailing commas from multi-line-value objects and blank-line-separates
+    // the entries (issue #54), so it no longer matches `tofu fmt` here. Minimal
+    // preserves the comma style and must still match — guarding the
+    // closing-brace placement in the comma-keeping mode. The opinionated
+    // reformatting is covered by `fixture_map_trailing_commas_normalized`.
     let input = r#"locals {
   github_actions_roles = {
     aaa = {
@@ -270,7 +277,7 @@ fn parity_object_of_objects_with_trailing_commas() {
   }
 }
 "#;
-    check_parity("object_of_objects_with_trailing_commas", input);
+    check_parity_minimal("object_of_objects_with_trailing_commas", input);
 }
 
 #[test]
