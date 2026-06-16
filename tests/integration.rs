@@ -297,6 +297,15 @@ fn fixture_provider_no_version_hoist() {
 }
 
 #[test]
+fn fixture_nested_inline_comments() {
+    // Issue #53: an inline `#` comment on an object entry must survive,
+    // including when the entry is comma-terminated (the comment then parses
+    // into the next entry's prefix, or the object trailing for the last
+    // entry) and at multiple nesting levels.
+    run_fixture("nested_inline_comments");
+}
+
+#[test]
 fn fixture_single_line_block() {
     // Single-line block bodies (e.g. `mock_provider "x" { alias = "y" }`,
     // as seen in .tftest files) keep exactly ONE space after `{`, matching

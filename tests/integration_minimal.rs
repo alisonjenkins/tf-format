@@ -50,6 +50,16 @@ fn fixture_no_meta_hoisting() {
 }
 
 #[test]
+fn fixture_comma_entry_inline_comments() {
+    // Issue #53: inline comments on comma-terminated object entries (which
+    // parse into the next entry's prefix) must survive and stay inline —
+    // minimal mode mirrors `tofu fmt`, which keeps each entry on its own line
+    // with its comment. Regression: they used to collapse onto one line,
+    // dropping all but the last comment.
+    run_minimal_fixture("comma_entry_inline_comments");
+}
+
+#[test]
 fn fixture_dynamic_preserved() {
     // Issue #55 is opinionated-only: a `dynamic` block with `content`
     // written before `for_each` must keep that author order under minimal
