@@ -305,3 +305,13 @@ fn fixture_single_line_block() {
     // one-line block nested inside a multi-line body.
     run_fixture("single_line_block");
 }
+
+#[test]
+fn fixture_dynamic_meta_arguments() {
+    // Issue #55: inside a `dynamic` block, `for_each` / `iterator` /
+    // `labels` are meta-args and must hoist ahead of `content` — even when
+    // `for_each` is multi-line (it used to alphabetise next to `content`,
+    // landing after it). Covers single- and multi-line `for_each`, all three
+    // iteration args, and a `dynamic` nested inside another's `content`.
+    run_fixture("dynamic_meta_arguments");
+}
