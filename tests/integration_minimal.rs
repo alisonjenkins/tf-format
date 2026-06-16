@@ -58,6 +58,14 @@ fn fixture_dynamic_preserved() {
 }
 
 #[test]
+fn fixture_map_commas_preserved() {
+    // Issue #54 is opinionated-only: minimal style mirrors `tofu fmt`, which
+    // preserves an object's comma style — a multi-line-value map with
+    // trailing commas keeps them and its author layout.
+    run_minimal_fixture("map_commas_preserved");
+}
+
+#[test]
 fn fixture_leading_comments_preserved() {
     // P0 (data loss): a file's leading comments + the blank line after them
     // must survive minimal formatting. The top-level flattener used to clear
