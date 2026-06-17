@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.4.8](https://github.com/alisonjenkins/tf-format/compare/v0.4.7...v0.4.8) (2026-06-17)
+
+
+### Bug Fixes
+
+* **cli:** default to the current directory and fail on empty glob matches ([560eefa](https://github.com/alisonjenkins/tf-format/commit/560eefad99f19ec40018199abc719ae6ed1583b7))
+* **cli:** print the diff when --check and --diff are combined ([6e64eb8](https://github.com/alisonjenkins/tf-format/commit/6e64eb8227ed8abc214c18fe91aef3176e7cdd8d))
+* **cli:** reject positional file arguments with --stdin ([34559b5](https://github.com/alisonjenkins/tf-format/commit/34559b53716c935d2806ae64a2f5f30e145a6951))
+* **formatter:** align `=` by rune count, not byte length ([09baf51](https://github.com/alisonjenkins/tf-format/commit/09baf515dbf0fb45848313d83b51c076dfa04d3b))
+* **formatter:** detect blank lines in CRLF decor ([dec9610](https://github.com/alisonjenkins/tf-format/commit/dec9610248642195b3c3d49dafd78b5774d0959c))
+* **formatter:** keep a file-header comment at the top when sorting blocks ([2ae1417](https://github.com/alisonjenkins/tf-format/commit/2ae1417bd573b370d5160a0b46fde685ffac97ad))
+* **formatter:** keep inline comments on comma-terminated object entries ([5eab8bf](https://github.com/alisonjenkins/tf-format/commit/5eab8bf8b0d417ae975cc9538e5704e8e6d64603))
+* **formatter:** keep inline object-entry comments in opinionated mode ([4fad4cf](https://github.com/alisonjenkins/tf-format/commit/4fad4cf72bde188f556ad95313618d71c8c55d6e))
+* **formatter:** no forced blank before a top-level attr run in minimal mode ([0379514](https://github.com/alisonjenkins/tf-format/commit/0379514998e6fb7c6a07c078ab728d121c90fcee))
+* **formatter:** normalize stale heredoc `=` padding in opinionated mode ([11996cf](https://github.com/alisonjenkins/tf-format/commit/11996cf0fcca13e5c632dbdc41a0a68df3263ca7))
+* **formatter:** preserve blank after an inline object-open comment (minimal) ([ee38518](https://github.com/alisonjenkins/tf-format/commit/ee385184b3991a32e620c7604d9192ea6be63eb5))
+* **formatter:** walk for-cond and index exprs when restoring heredoc markers ([17eb5b8](https://github.com/alisonjenkins/tf-format/commit/17eb5b8417b6f0c712e4dc5178cbcae3693e92cc))
+* **lib:** ignore heredoc openers inside comments in the text scanners ([7eb1c22](https://github.com/alisonjenkins/tf-format/commit/7eb1c224a401c480b5c701a293552b68cb48a73a))
+* **lib:** refuse to format input that hcl-edit cannot represent ([96ca21e](https://github.com/alisonjenkins/tf-format/commit/96ca21ed4ac295563c26ec86cd4f485a475e62f5))
+* **opinionated:** hoist dynamic-block for_each/iterator/labels before content ([0b7230c](https://github.com/alisonjenkins/tf-format/commit/0b7230cd064e882f8cd8f9a2ac1564dea73be121))
+* **opinionated:** strip trailing commas from multi-line map entries ([4d8223d](https://github.com/alisonjenkins/tf-format/commit/4d8223dfaeaf91e52670ef75a276cce9477123ab))
+
 ## [0.4.7](https://github.com/alisonjenkins/tf-format/compare/v0.4.6...v0.4.7) (2026-06-08)
 
 
