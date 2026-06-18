@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.9](https://github.com/alisonjenkins/tf-format/compare/v0.4.8...v0.4.9) (2026-06-18)
+
+
+### Bug Fixes
+
+* **formatter:** align trailing comments by column ([498f28e](https://github.com/alisonjenkins/tf-format/commit/498f28e029bacd97ad34c2f12086604fdd78c8fc))
+
 ## [0.4.8](https://github.com/alisonjenkins/tf-format/compare/v0.4.7...v0.4.8) (2026-06-17)
 
 
