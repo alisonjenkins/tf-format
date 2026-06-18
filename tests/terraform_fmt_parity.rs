@@ -411,6 +411,63 @@ fn parity_object_mixed_colon_and_equals() {
     check_parity_minimal("object_mixed_colon_and_equals", input);
 }
 
+#[test]
+fn parity_body_trailing_comment_alignment() {
+    // `tofu fmt` column-aligns trailing inline comments across a run of
+    // consecutive comment-bearing attributes. A comment-less line breaks the
+    // comment run (but not the `=` run), and a blank line breaks both.
+    let input = r#"locals {
+  a = 1 # one
+  bb = 22 # two
+  ccc = 333
+  dddd = 4 # four
+  e = 5
+}
+"#;
+    check_parity("body_trailing_comment_alignment", input);
+}
+
+#[test]
+fn parity_object_trailing_comment_alignment() {
+    // Trailing inline comments inside an object literal align by the value's
+    // end column across each consecutive comment-bearing run.
+    // Minimal mode: opinionated mode would re-sort the keys, diverging from
+    // tofu's source order, so the object path is exercised in minimal mode.
+    let input = r#"x = {
+  short = "x" # s
+  longername = "yy" # l
+  plain = 1
+}
+"#;
+    check_parity_minimal("object_trailing_comment_alignment", input);
+}
+
+#[test]
+fn parity_object_colon_trailing_comment_alignment() {
+    // For `:` runs the keys are NOT padded, so the comment column folds in the
+    // per-key length — comment alignment must measure the value's end column,
+    // not just the value width. tf-format minimal must mirror tofu fmt.
+    let input = r#"x = {
+  k : "v" # colon1
+  k2 : "vv" # colon2
+}
+"#;
+    check_parity_minimal("object_colon_trailing_comment_alignment", input);
+}
+
+#[test]
+fn parity_hash_inside_string_not_a_comment() {
+    // A `#` inside a string literal is part of the value, not a trailing
+    // comment — it must not perturb alignment.
+    let input = r#"x = {
+  a = 1
+  bb = 2 # c
+  ccc = "https://example.com#frag" # url with hash
+}
+"#;
+    check_parity("hash_inside_string_not_a_comment", input);
+}
+
 /// Sweep every minimal-mode fixture's `input.tf` through real `tofu fmt`
 /// so the minimal style is validated against the actual formatter, not only
 /// against hand-written `expected.tf` files. Catches any minimal-mode
