@@ -478,6 +478,12 @@ pub fn format_body(body: &mut Body, depth: usize, parent_ident: Option<&str>, st
                 format_body(&mut block.body, depth + 1, nested_parent, style);
             }
             Structure::Attribute(attr) => {
+                // `tofu fmt` unwraps a redundant whole-string interpolation
+                // (`a = "${foo}"` → `a = foo`) but ONLY at attribute-value
+                // position — never inside objects, lists, function args, etc.
+                if let Some(inner) = try_unwrap_single_interpolation(&attr.value) {
+                    attr.value = inner;
+                }
                 let prefix_width = key_width(attr.key.as_str()) + 3; // `key = `
                 format_expression(&mut attr.value, depth + 1, style, prefix_width);
             }
@@ -1019,6 +1025,25 @@ fn format_expression(expr: &mut Expression, depth: usize, style: FormatStyle, pr
         // Leaf expressions (Null, Bool, Number, String, Variable, etc.)
         _ => {}
     }
+}
+
+/// If `expr` is a string template consisting of exactly one interpolation
+/// element (`"${ … }"` and nothing else), return the interpolated expression
+/// with the template's outer decor, so `terraform fmt` / `tofu fmt`'s
+/// redundant-interpolation unwrap can be applied. The interpolation's own
+/// interior decor and strip markers are discarded (tofu drops them too).
+/// Returns `None` for plain strings, partial templates, and directives.
+fn try_unwrap_single_interpolation(expr: &Expression) -> Option<Expression> {
+    let Expression::StringTemplate(template) = expr else {
+        return None;
+    };
+    if template.len() != 1 {
+        return None;
+    }
+    let interpolation = template.get(0)?.as_interpolation()?;
+    let mut inner = interpolation.expr.clone();
+    *inner.decor_mut() = expr.decor().clone();
+    Some(inner)
 }
 
 /// Vertically align the `=` signs of consecutive single-line attributes in a
@@ -1852,6 +1877,11 @@ pub fn sort_top_level(body: &mut Body, style: FormatStyle) {
                 format_body(&mut block.body, 0, Some(&ident), style);
             }
             Structure::Attribute(attr) => {
+                // Unwrap a redundant whole-string interpolation at attribute
+                // position (e.g. in `.tfvars`), matching `tofu fmt`.
+                if let Some(inner) = try_unwrap_single_interpolation(&attr.value) {
+                    attr.value = inner;
+                }
                 let prefix_width = key_width(attr.key.as_str()) + 3; // `key = `
                 format_expression(&mut attr.value, 0, style, prefix_width);
             }
