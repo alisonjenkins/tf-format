@@ -468,6 +468,26 @@ fn parity_hash_inside_string_not_a_comment() {
     check_parity("hash_inside_string_not_a_comment", input);
 }
 
+#[test]
+fn parity_array_element_trailing_comment_alignment() {
+    // `tofu fmt` column-aligns trailing comments on multi-line array elements
+    // across runs of consecutive comment-bearing elements. An array element's
+    // comment lives in the *next* element's prefix (the comma is rendered
+    // between), and the last element's in the array trailing decor.
+    let input = r#"locals {
+  l = [
+    "a", # first
+    "bb", # second
+    "ccc",
+    1, # x
+    22,
+    333, # y
+  ]
+}
+"#;
+    check_parity_minimal("array_element_trailing_comment_alignment", input);
+}
+
 /// Sweep every minimal-mode fixture's `input.tf` through real `tofu fmt`
 /// so the minimal style is validated against the actual formatter, not only
 /// against hand-written `expected.tf` files. Catches any minimal-mode

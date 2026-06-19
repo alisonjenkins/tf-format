@@ -952,6 +952,9 @@ fn format_expression(expr: &mut Expression, depth: usize, style: FormatStyle, pr
                     format_expression(elem, elem_depth, style, 0);
                 }
             }
+            if is_multiline_array(arr) {
+                align_array_element_comments(arr);
+            }
         }
         Expression::FuncCall(call) => {
             // Multi-line FuncCalls put each arg on its own line
@@ -1260,6 +1263,102 @@ fn align_object_value_comments(entries: &mut [(ObjectKey, hcl_edit::expr::Object
                 .set_suffix(format!("{}{}", " ".repeat(padding), comment));
         }
         start = end;
+    }
+}
+
+/// Vertically align trailing inline comments of multi-line array elements,
+/// matching `terraform fmt` / `tofu fmt`. Unlike objects, an array element's
+/// trailing comment is NOT in its own decor: the comma is rendered between
+/// elements, so element `i`'s trailing comment lives in element `i+1`'s
+/// *prefix* (the part before the newline), and the last element's lives in
+/// `arr.trailing()`. Comments align across each maximal run of consecutive
+/// comment-bearing elements; a comment-less element breaks the run.
+fn align_array_element_comments(arr: &mut Array) {
+    let n = arr.len();
+    if n == 0 {
+        return;
+    }
+    let trailing_comma = arr.trailing_comma();
+
+    // Per element: rune width of the value (decor stripped) and whether it is
+    // single-line. The column where the value+comma ends drives the comment
+    // column: value_end = value width + 1 for the comma (every element in a
+    // comment run is followed by one — interior commas always exist, and the
+    // last element only carries a trailing comment when it has a comma too).
+    let value_end = |i: usize, arr: &Array| -> Option<usize> {
+        let e = arr.get(i)?;
+        let full = e.to_string();
+        let pre = e.decor().prefix().map(|p| p.len()).unwrap_or(0);
+        let suf = e.decor().suffix().map(|s| s.len()).unwrap_or(0);
+        let inner = &full[pre..full.len() - suf];
+        if inner.contains('\n') {
+            return None; // multi-line element: trailing comment isn't on the value line
+        }
+        let comma = if i + 1 < n || trailing_comma { 1 } else { 0 };
+        Some(inner.chars().count() + comma)
+    };
+
+    // The decor slot holding element `i`'s trailing comment.
+    let slot = |i: usize, arr: &Array| -> String {
+        if i + 1 < n {
+            arr.get(i + 1)
+                .and_then(|e| e.decor().prefix().map(|p| p.to_string()))
+                .unwrap_or_default()
+        } else {
+            arr.trailing().to_string()
+        }
+    };
+    // The inline portion of a slot is everything before its first newline.
+    let inline_comment_of = |s: &str| -> Option<String> {
+        let inline = s.split('\n').next().unwrap_or("");
+        trailing_inline_comment(inline).map(str::to_string)
+    };
+
+    let has_comment = |i: usize, arr: &Array| -> bool {
+        value_end(i, arr).is_some() && inline_comment_of(&slot(i, arr)).is_some()
+    };
+
+    // Compute new slot strings for each comment run, then apply them.
+    let mut updates: Vec<(usize, String)> = Vec::new();
+    let mut start = 0;
+    while start < n {
+        if !has_comment(start, arr) {
+            start += 1;
+            continue;
+        }
+        let mut end = start + 1;
+        while end < n && has_comment(end, arr) {
+            end += 1;
+        }
+        let max_end = (start..end)
+            .filter_map(|i| value_end(i, arr))
+            .max()
+            .unwrap_or(0);
+        for i in start..end {
+            let (Some(ve), s) = (value_end(i, arr), slot(i, arr)) else {
+                continue;
+            };
+            let Some(comment) = inline_comment_of(&s) else {
+                continue;
+            };
+            let rest = match s.find('\n') {
+                Some(nl) => &s[nl..],
+                None => "",
+            };
+            let padding = max_end - ve + 1;
+            updates.push((i, format!("{}{}{}", " ".repeat(padding), comment, rest)));
+        }
+        start = end;
+    }
+
+    for (i, new_slot) in updates {
+        if i + 1 < n {
+            if let Some(e) = arr.get_mut(i + 1) {
+                e.decor_mut().set_prefix(new_slot);
+            }
+        } else {
+            arr.set_trailing(new_slot);
+        }
     }
 }
 
