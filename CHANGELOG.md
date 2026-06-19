@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.4.10](https://github.com/alisonjenkins/tf-format/compare/v0.4.9...v0.4.10) (2026-06-19)
+
+
+### Bug Fixes
+
+* **formatter:** align trailing comments on multi-line array elements ([742df98](https://github.com/alisonjenkins/tf-format/commit/742df9885a2b9c7530d7d35338d99d83d4934c5e))
+* **formatter:** space before `]` in single-line array with trailing comma ([bd30bb7](https://github.com/alisonjenkins/tf-format/commit/bd30bb77c57aa12b89a97b3151f602be66e931ad))
+* **formatter:** unwrap redundant interpolation at attribute position ([3e6a743](https://github.com/alisonjenkins/tf-format/commit/3e6a7432a8887f37a2dbe16f9fc2488536db3fcb))
+* **lib:** stop refusing valid files on benign whitespace normalization ([832a7ac](https://github.com/alisonjenkins/tf-format/commit/832a7ac9f5df695cd2af86441e0a205f2f69e459))
+
 ## [0.4.9](https://github.com/alisonjenkins/tf-format/compare/v0.4.8...v0.4.9) (2026-06-18)
 
 
