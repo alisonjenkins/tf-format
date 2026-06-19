@@ -303,6 +303,40 @@ fn duplicate_object_keys_refuse_to_format() {
 }
 
 #[test]
+fn benign_whitespace_normalization_does_not_refuse() {
+    // Regression: the data-loss guard used to byte-compare the re-encoded body
+    // against the input, so any whitespace hcl-edit normalizes on parse (it has
+    // no decor slot for spaces around `.` in a multi-segment traversal, tabs
+    // around operators, or newlines in a boolean chain) tripped the guard and
+    // refused VALID files with a misleading "duplicate keys" error. These must
+    // now format successfully (no objects, no duplicate keys, no data loss).
+    for input in [
+        "a = data . x . y\n",
+        "a = b[0] . c\n",
+        "output \"x\" {\n  value = module . vpc . id\n}\n",
+        "a = 1\t+\t2\n",
+        "a = (x &&\n  y &&\n  z)\n",
+    ] {
+        for opts in [FormatOptions::opinionated(), FormatOptions::minimal()] {
+            let out = match format_hcl_with(input, &opts) {
+                Ok(out) => out,
+                Err(e) => panic!("{:?}: refused valid input {input:?}: {e:?}", opts.style),
+            };
+            // And the result must be a fixpoint (no oscillation introduced by
+            // removing the refusal).
+            let twice = match format_hcl_with(&out, &opts) {
+                Ok(twice) => twice,
+                Err(e) => panic!(
+                    "{:?}: second format failed for {input:?}: {e:?}",
+                    opts.style
+                ),
+            };
+            assert_eq!(twice, out, "{:?}: not idempotent for {input:?}", opts.style);
+        }
+    }
+}
+
+#[test]
 fn invalid_hcl_returns_typed_parse_error() {
     // An unparseable input must surface a typed error, not panic.
     let err = match format_hcl("variable \"a\" {") {
