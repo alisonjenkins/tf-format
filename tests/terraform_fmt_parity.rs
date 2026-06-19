@@ -469,6 +469,25 @@ fn parity_hash_inside_string_not_a_comment() {
 }
 
 #[test]
+fn parity_redundant_interpolation_unwrap_attribute_only() {
+    // `tofu fmt` unwraps a whole-string interpolation (`"${foo}"` → `foo`,
+    // `"${1 + 2}"` → `1 + 2`) but ONLY at attribute-value position. It is kept
+    // inside objects, lists, function arguments and conditional branches, and
+    // partial templates (`"pre${foo}"`) are always left alone.
+    let input = r#"locals {
+  unwrap_var  = "${foo}"
+  unwrap_expr = "${1 + 2}"
+  keep_obj    = { k = "${foo}" }
+  keep_list   = ["${foo}"]
+  keep_func   = upper("${foo}")
+  keep_cond   = c ? "${foo}" : "${bar}"
+  keep_partial = "pre${foo}"
+}
+"#;
+    check_parity_minimal("redundant_interpolation_unwrap_attribute_only", input);
+}
+
+#[test]
 fn parity_single_line_array_trailing_comma_space() {
     // `tofu fmt` renders a single-line array with a trailing comma as `…, ]`
     // (one space before the bracket), like the object `…, }` form.
