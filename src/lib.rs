@@ -85,19 +85,27 @@ pub fn format_hcl_with(input: &str, opts: &FormatOptions) -> Result<String, Form
     // heredocs out of source order (issue #43).
     formatter::restore_heredoc_indent_markers(&mut body, &heredoc_markers);
 
-    // hcl-edit round-trips losslessly (parse → to_string is byte-identical)
-    // except where its data model cannot represent the input: an object with
+    // hcl-edit can lose data its model cannot represent: an object with
     // duplicate keys is silently collapsed at parse time (`Object` is a map),
     // which would make formatting delete one of the user's entries. The
     // heredoc `<<-` marker drop is the one other known structural-lossy case,
-    // and it was just restored above — so any remaining mismatch means
-    // formatting would corrupt data. Refuse instead. (Duplicate object keys
-    // are invalid Terraform anyway: `terraform validate` rejects them.)
+    // and it was just restored above — so any remaining *structural* mismatch
+    // means formatting would corrupt data. Refuse instead. (Duplicate object
+    // keys are invalid Terraform anyway: `terraform validate` rejects them.)
     //
-    // The comparison ignores `\r` because hcl-edit does not round-trip CRLF
-    // byte-identically; tf-format normalizes line endings to LF regardless,
-    // so a `\r`-only difference is never data loss.
-    if body.to_string().replace('\r', "") != input.replace('\r', "") {
+    // The comparison is whitespace-insensitive: hcl-edit does NOT round-trip
+    // byte-identically — it normalizes interior whitespace it has no decor slot
+    // for (e.g. `a . b . c` → `a.b.c`, tabs/newlines around operators) and does
+    // not preserve CRLF. Those are benign (and match `tofu fmt`); only a
+    // difference in the non-whitespace tokens is real data loss. A blunt
+    // byte-compare here used to refuse valid files with a misleading
+    // duplicate-keys error. Strings, heredoc bodies and comments are preserved
+    // verbatim on both sides, so stripping whitespace from both cannot mask a
+    // structural change (a dropped entry leaves its non-whitespace tokens
+    // missing).
+    let without_whitespace =
+        |s: &str| -> String { s.chars().filter(|c| !c.is_whitespace()).collect() };
+    if without_whitespace(&body.to_string()) != without_whitespace(input) {
         return Err(FormatError::LossyParse);
     }
 
