@@ -954,6 +954,12 @@ fn format_expression(expr: &mut Expression, depth: usize, style: FormatStyle, pr
             }
             if is_multiline_array(arr) {
                 align_array_element_comments(arr);
+            } else if arr.trailing_comma() && !arr.is_empty() {
+                // `tofu fmt` renders a single-line array with a trailing comma
+                // as `…, ]` — one space before the bracket, mirroring the
+                // single-line object `…, }` form. hcl-edit leaves whatever the
+                // source had (often nothing); normalize it.
+                arr.set_trailing(" ");
             }
         }
         Expression::FuncCall(call) => {
