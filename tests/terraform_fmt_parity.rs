@@ -469,6 +469,19 @@ fn parity_hash_inside_string_not_a_comment() {
 }
 
 #[test]
+fn parity_single_line_array_trailing_comma_space() {
+    // `tofu fmt` renders a single-line array with a trailing comma as `…, ]`
+    // (one space before the bracket), like the object `…, }` form.
+    let input = r#"locals {
+  a = [1, 2, 3,]
+  b = [1,]
+  c = [[1, 2,], [3, 4,]]
+}
+"#;
+    check_parity_minimal("single_line_array_trailing_comma_space", input);
+}
+
+#[test]
 fn parity_array_element_trailing_comment_alignment() {
     // `tofu fmt` column-aligns trailing comments on multi-line array elements
     // across runs of consecutive comment-bearing elements. An array element's
