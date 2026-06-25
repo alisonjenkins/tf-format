@@ -1,8 +1,8 @@
-use hcl_edit::Decorate;
 use hcl_edit::expr::{
     Array, Expression, Object, ObjectKey, ObjectValueAssignment, ObjectValueTerminator,
 };
 use hcl_edit::structure::{Body, Structure};
+use hcl_edit::{Decor, Decorate};
 
 use crate::classify::is_multiline;
 
@@ -238,6 +238,35 @@ fn count_leading_newlines(prefix: &str) -> usize {
 /// closing lines of a multi-line block comment — e.g. `line */` — leaving an
 /// unterminated `/*` and producing unparseable output. This span-based walk
 /// captures the whole block verbatim instead.
+/// Collapse a separator decor to a single space, but only when it is
+/// whitespace-only on one line and carries no comment. This normalizes
+/// squished for-expression separators (`var.x:` -> `var.x :`) while
+/// preserving wrapped-onto-the-next-line bodies (a `\n`-bearing decor) and
+/// inline comments untouched.
+///
+/// `set_suffix` selects which side of the decor to write: `true` for the
+/// suffix (e.g. the space before `:`), `false` for the prefix (e.g. the
+/// space after `:`).
+fn normalize_inline_space(decor: &mut Decor, set_suffix: bool) {
+    let current = if set_suffix {
+        decor.suffix()
+    } else {
+        decor.prefix()
+    }
+    .map(|s| s.to_string())
+    .unwrap_or_default();
+
+    if current.contains('\n') || !extract_comments(&current).is_empty() {
+        return;
+    }
+
+    if set_suffix {
+        decor.set_suffix(" ");
+    } else {
+        decor.set_prefix(" ");
+    }
+}
+
 fn extract_comments(prefix: &str) -> Vec<String> {
     let mut comments: Vec<String> = Vec::new();
     let mut lines = prefix.lines();
@@ -1013,6 +1042,28 @@ fn format_expression(expr: &mut Expression, depth: usize, style: FormatStyle, pr
             format_expression(&mut for_expr.value_expr, depth + 1, style, 0);
             if let Some(cond) = &mut for_expr.cond {
                 format_expression(&mut cond.expr, depth + 1, style, 0);
+            }
+
+            // Normalize the inline separator spacing to match
+            // `terraform fmt` / `tofu fmt`: a single space around the
+            // `:` and `=>` separators. hcl-edit only falls back to its
+            // " " default when the decor is unset; a captured-from-source
+            // empty string (e.g. `var.x:`) overrides it, so we set the
+            // spaces explicitly. Each helper leaves multi-line bodies and
+            // inline comments untouched (see `normalize_inline_space`).
+            //
+            // Space before `:` lives in the collection_expr suffix.
+            normalize_inline_space(for_expr.intro.collection_expr.decor_mut(), true);
+            if let Some(key_expr) = &mut for_expr.key_expr {
+                // Object form `C : K => V`: space after `:` (key prefix),
+                // space before `=>` (key suffix), space after `=>`
+                // (value prefix).
+                normalize_inline_space(key_expr.decor_mut(), false);
+                normalize_inline_space(key_expr.decor_mut(), true);
+                normalize_inline_space(for_expr.value_expr.decor_mut(), false);
+            } else {
+                // List form `C : V`: space after `:` (value prefix).
+                normalize_inline_space(for_expr.value_expr.decor_mut(), false);
             }
         }
         Expression::UnaryOp(op) => {
