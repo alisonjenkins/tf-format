@@ -11,12 +11,25 @@ use std::path::Path;
 
 use tf_format::{FormatOptions, format_hcl_with};
 
+/// Resolve a fixture's input/expected pair, preferring the `.tftest.hcl` suffix
+/// when present so test-file fixtures read with their real extension. The
+/// minimal formatter is content-driven, so the extension is purely cosmetic.
+fn fixture_pair(dir: &Path) -> (String, String) {
+    let (input_name, expected_name) = if dir.join("input.tftest.hcl").exists() {
+        ("input.tftest.hcl", "expected.tftest.hcl")
+    } else {
+        ("input.tf", "expected.tf")
+    };
+    let input = fs::read_to_string(dir.join(input_name))
+        .unwrap_or_else(|e| panic!("failed to read {input_name} for fixture '{dir:?}': {e}"));
+    let expected = fs::read_to_string(dir.join(expected_name))
+        .unwrap_or_else(|e| panic!("failed to read {expected_name} for fixture '{dir:?}': {e}"));
+    (input, expected)
+}
+
 fn run_minimal_fixture(name: &str) {
     let dir = Path::new("tests/fixtures-minimal").join(name);
-    let input = fs::read_to_string(dir.join("input.tf"))
-        .unwrap_or_else(|e| panic!("failed to read input.tf for fixture '{name}': {e}"));
-    let expected = fs::read_to_string(dir.join("expected.tf"))
-        .unwrap_or_else(|e| panic!("failed to read expected.tf for fixture '{name}': {e}"));
+    let (input, expected) = fixture_pair(&dir);
 
     let opts = FormatOptions::minimal();
     let actual = format_hcl_with(&input, &opts)
@@ -39,6 +52,14 @@ fn fixture_order_preserved() {
     // Three resources written z, b, a — minimal style must NOT
     // reorder them.
     run_minimal_fixture("order_preserved");
+}
+
+#[test]
+fn fixture_tftest_minimal() {
+    // `.tftest.hcl` under minimal style: `=` alignment and spacing fire, but
+    // NO opinionated rewrite leaks through — `assert` stays before `command`,
+    // `error_message` before `condition`, `alias` unmoved. terraform-fmt parity.
+    run_minimal_fixture("tftest_minimal");
 }
 
 #[test]

@@ -3,12 +3,26 @@
 use std::fs;
 use std::path::Path;
 
+/// Resolve a fixture's input/expected pair. Test-file fixtures carry a
+/// `.tftest.hcl` suffix (so the fixture name reflects the real extension the
+/// formatter sees in the wild); everything else uses the default `.tf`. The
+/// formatter is content-driven, so the extension is purely for readability.
+fn fixture_pair(dir: &Path) -> (String, String) {
+    let (input_name, expected_name) = if dir.join("input.tftest.hcl").exists() {
+        ("input.tftest.hcl", "expected.tftest.hcl")
+    } else {
+        ("input.tf", "expected.tf")
+    };
+    let input = fs::read_to_string(dir.join(input_name))
+        .unwrap_or_else(|e| panic!("failed to read {input_name} for fixture '{dir:?}': {e}"));
+    let expected = fs::read_to_string(dir.join(expected_name))
+        .unwrap_or_else(|e| panic!("failed to read {expected_name} for fixture '{dir:?}': {e}"));
+    (input, expected)
+}
+
 fn run_fixture(name: &str) {
     let dir = Path::new("tests/fixtures").join(name);
-    let input = fs::read_to_string(dir.join("input.tf"))
-        .unwrap_or_else(|e| panic!("failed to read input.tf for fixture '{name}': {e}"));
-    let expected = fs::read_to_string(dir.join("expected.tf"))
-        .unwrap_or_else(|e| panic!("failed to read expected.tf for fixture '{name}': {e}"));
+    let (input, expected) = fixture_pair(&dir);
 
     let actual = tf_format::format_hcl(&input)
         .unwrap_or_else(|e| panic!("format_hcl failed for fixture '{name}': {e}"));
@@ -332,6 +346,31 @@ fn fixture_dynamic_meta_arguments() {
     // landing after it). Covers single- and multi-line `for_each`, all three
     // iteration args, and a `dynamic` nested inside another's `content`.
     run_fixture("dynamic_meta_arguments");
+}
+
+#[test]
+fn fixture_tftest_run_hoisting() {
+    // `.tftest.hcl`: a `run` block hoists its directive (`command`) and setup
+    // blocks (`variables` / `module`) ahead of the assertion blocks (`assert` /
+    // `expect_failures`), so the block reads "set up, then assert". Generic
+    // transforms (`=` alignment, `condition` before `error_message`) also apply.
+    run_fixture("tftest_run_hoisting");
+}
+
+#[test]
+fn fixture_tftest_run_order_preserved() {
+    // `.tftest.hcl` (negative): top-level `run` blocks are NEVER reordered —
+    // their execution order is semantically significant. Written z, a, m; they
+    // must stay z, a, m even though opinionated mode sorts other block types.
+    run_fixture("tftest_run_order_preserved");
+}
+
+#[test]
+fn fixture_tftest_mock_provider() {
+    // `.tftest.hcl`: `mock_provider` hoists `alias`; its `mock_resource` /
+    // `override_*` blocks format generically. A consuming `run` hoists
+    // `command` ahead of `providers`.
+    run_fixture("tftest_mock_provider");
 }
 
 #[test]

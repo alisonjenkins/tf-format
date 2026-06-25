@@ -541,7 +541,16 @@ fn parity_all_minimal_fixtures() {
         if !path.is_dir() {
             continue;
         }
-        let input_path = path.join("input.tf");
+        // Test-file fixtures carry a `.tftest.hcl` suffix; everything else uses
+        // the default `.tf`. tofu fmt reads stdin as generic HCL either way.
+        let input_path = {
+            let tftest = path.join("input.tftest.hcl");
+            if tftest.exists() {
+                tftest
+            } else {
+                path.join("input.tf")
+            }
+        };
         let input = match std::fs::read_to_string(&input_path) {
             Ok(s) => s,
             Err(e) => panic!("failed to read {}: {e}", input_path.display()),
