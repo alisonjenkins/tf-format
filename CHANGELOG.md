@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.5.0](https://github.com/alisonjenkins/tf-format/compare/v0.4.10...v0.5.0) (2026-06-25)
+
+
+### Features
+
+* **formatter:** make opinionated mode test-aware for .tftest.hcl ([48bfbb8](https://github.com/alisonjenkins/tf-format/commit/48bfbb8c6049a1e15cb63b0e14fb0df8948909e0))
+
+
+### Bug Fixes
+
+* **formatter:** normalize spacing around for-expression separators ([fc4db8e](https://github.com/alisonjenkins/tf-format/commit/fc4db8e273aa160626d264ad23fe1990a6dec123))
+* **formatter:** strip space in for-cond `if (cond)` -&gt; `if(cond)` ([2414e93](https://github.com/alisonjenkins/tf-format/commit/2414e93b6f16e3a0a91b1d666ca02773fbf18f8f))
+
 ## [0.4.10](https://github.com/alisonjenkins/tf-format/compare/v0.4.9...v0.4.10) (2026-06-19)
 
 
