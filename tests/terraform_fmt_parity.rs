@@ -167,6 +167,19 @@ fn parity_object_keys() {
 }
 
 #[test]
+fn parity_for_cond_if_parenthesised() {
+    // `tofu fmt` glues the `if` filter keyword to a parenthesised condition:
+    // `if (cond)` -> `if(cond)`. A non-parenthesised condition keeps its space.
+    let input = r#"locals {
+  a_paren    = [for x in y : x if (x)]
+  b_nonparen = [for x in y : x if x > 1]
+  c_object   = { for k, v in m : k => v if (v) }
+}
+"#;
+    check_parity("for_cond_if_parenthesised", input);
+}
+
+#[test]
 fn parity_single_attribute() {
     let input = r#"resource "aws_instance" "example" {
   ami       =     "ami-12345678"
