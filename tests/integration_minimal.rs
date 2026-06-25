@@ -248,3 +248,11 @@ fn fixture_single_line_block() {
     // indent → `{  alias`.
     run_minimal_fixture("single_line_block");
 }
+
+#[test]
+fn fixture_for_expr_colon_spacing() {
+    // `terraform fmt` parity: squished for-expression separators
+    // (`var.x:x`, `k=>v`) gain a single space around `:` and `=>`.
+    // Source order is preserved and wrapped bodies stay multi-line.
+    run_minimal_fixture("for_expr_colon_spacing");
+}

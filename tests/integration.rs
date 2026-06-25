@@ -152,6 +152,15 @@ fn fixture_for_expr_value_indent() {
 }
 
 #[test]
+fn fixture_for_expr_colon_spacing() {
+    // Regression: squished for-expression separators (`var.x:x`,
+    // `k=>v`) must be normalized to a single space around `:` and
+    // `=>`, matching `terraform fmt`. Wrapped (multi-line) bodies and
+    // inline comments are left untouched.
+    run_fixture("for_expr_colon_spacing");
+}
+
+#[test]
 fn fixture_sort_output_blocks() {
     // TEST-4: a run of `output` blocks must sort alphabetically by name.
     run_fixture("sort_output_blocks");
