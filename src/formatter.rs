@@ -74,6 +74,21 @@ fn priorities_for_block(ident: &str) -> (&'static [&'static str], &'static [&'st
         // legal nested block, so the priority-tier-before-normal-tier emission
         // order already places it last — no need to list it as a priority block.
         "dynamic" => (&["for_each", "iterator", "labels"], &[]),
+        // Terraform/OpenTofu test files (`.tftest.hcl`). A `run` block is the
+        // unit of test execution: hoist its directive (`command`) and the
+        // setup args/blocks (`providers`, `state_key`, `variables`, `module`,
+        // `plan_options`) ahead of the assertion blocks (`assert`,
+        // `expect_failures`), which otherwise sort before `module`/`variables`
+        // alphabetically and read as "assert, then set up". Run blocks
+        // themselves are never reordered (their execution order is semantic).
+        "run" => (
+            &["command", "providers", "state_key"],
+            &["variables", "module", "plan_options"],
+        ),
+        // `mock_provider` sets `alias` to bind a mock to a provider
+        // configuration; hoist it ahead of the mock_resource / mock_data and
+        // override_* blocks in the body.
+        "mock_provider" => (&["alias"], &[]),
         _ => (&[], &[]),
     }
 }
