@@ -1056,6 +1056,14 @@ fn format_expression(expr: &mut Expression, depth: usize, style: FormatStyle, pr
             }
             format_expression(&mut for_expr.value_expr, depth + 1, style, 0);
             if let Some(cond) = &mut for_expr.cond {
+                // `tofu fmt` glues the `if` filter keyword directly to a
+                // parenthesised condition: `if (cond)` -> `if(cond)`. The space
+                // between `if` and the expression is the expression's leading
+                // decor; the newline+indent of a condition on its own line lives
+                // on the `ForCond` decor instead, so clearing the prefix is safe.
+                if matches!(cond.expr, Expression::Parenthesis(_)) {
+                    cond.expr.decor_mut().set_prefix("");
+                }
                 format_expression(&mut cond.expr, depth + 1, style, 0);
             }
 
