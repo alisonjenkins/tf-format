@@ -3,6 +3,7 @@ use hcl_edit::expr::{
 };
 use hcl_edit::structure::{Body, Structure};
 use hcl_edit::{Decor, Decorate};
+use std::borrow::Cow;
 
 use crate::classify::is_multiline;
 
@@ -153,18 +154,18 @@ fn expr_inner_width(expr: &Expression) -> usize {
 /// before its marker — return the comment text (from the marker to the end).
 /// A newline before the marker means the comment belongs to the *next* line,
 /// so it is not a trailing comment and `None` is returned.
+///
+/// The marker must be the first non-whitespace token on the decor's first line
+/// (like [`split_leading_inline_comment`]). A bare `decor.find('#')` would also
+/// match a `#` inside a `/* … */` block comment or a URL and split at the wrong
+/// place, corrupting the decor.
 fn trailing_inline_comment(decor: &str) -> Option<&str> {
-    let hash = decor.find('#');
-    let slash = decor.find("//");
-    let marker = match (hash, slash) {
-        (Some(a), Some(b)) => a.min(b),
-        (Some(a), None) => a,
-        (None, Some(b)) => b,
-        (None, None) => return None,
-    };
-    if decor[..marker].contains('\n') {
+    let first_line = decor.lines().next().unwrap_or("");
+    let trimmed = first_line.trim_start();
+    if !(trimmed.starts_with('#') || trimmed.starts_with("//")) {
         return None;
     }
+    let marker = first_line.len() - trimmed.len();
     Some(&decor[marker..])
 }
 
@@ -173,10 +174,12 @@ fn trailing_inline_comment(decor: &str) -> Option<&str> {
 /// element on the line *before* this decor) and the remainder with that
 /// comment's first line removed. Any genuine own-line comments that followed it
 /// are preserved in the returned remainder. When there is no trailing inline
-/// comment, the input is returned unchanged as the remainder.
-fn split_trailing_inline_comment(decor: &str) -> (Option<String>, String) {
+/// comment, the input is borrowed unchanged as the remainder — this runs
+/// per-element on every multi-line array, so the common no-comment path avoids
+/// an allocation.
+fn split_trailing_inline_comment(decor: &str) -> (Option<String>, Cow<'_, str>) {
     match trailing_inline_comment(decor) {
-        None => (None, decor.to_string()),
+        None => (None, Cow::Borrowed(decor)),
         Some(from_marker) => {
             let marker_pos = decor.len() - from_marker.len();
             let line_end = from_marker
@@ -186,7 +189,7 @@ fn split_trailing_inline_comment(decor: &str) -> (Option<String>, String) {
             let comment = decor[marker_pos..line_end].trim_end().to_string();
             let mut rest = decor[..marker_pos].to_string();
             rest.push_str(&decor[line_end..]);
-            (Some(comment), rest)
+            (Some(comment), Cow::Owned(rest))
         }
     }
 }
