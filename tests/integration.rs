@@ -59,6 +59,14 @@ fn fixture_comments_preserved() {
     run_fixture("comments_preserved");
 }
 
+// issue #75: a trailing inline comment on an array element must stay on that
+// element's line, not get hoisted onto its own line (where it reads as a
+// leading comment on the next element).
+#[test]
+fn fixture_array_trailing_comment() {
+    run_fixture("array_trailing_comment");
+}
+
 #[test]
 fn fixture_variables_sorted() {
     run_fixture("variables_sorted");
