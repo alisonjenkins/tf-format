@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.1](https://github.com/alisonjenkins/tf-format/compare/v0.5.0...v0.5.1) (2026-07-01)
+
+
+### Bug Fixes
+
+* **formatter:** guard trailing-comment split against non-comment markers ([e562250](https://github.com/alisonjenkins/tf-format/commit/e562250faf39c08a581c06e9e99d51ede417004b))
+* **opinionated:** keep array element trailing comments on their line ([cdd015f](https://github.com/alisonjenkins/tf-format/commit/cdd015fe39d8706b443b23e24448ed89cd04e6d3))
+
 ## [0.5.0](https://github.com/alisonjenkins/tf-format/compare/v0.4.10...v0.5.0) (2026-06-25)
 
 
