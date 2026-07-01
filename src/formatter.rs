@@ -168,6 +168,29 @@ fn trailing_inline_comment(decor: &str) -> Option<&str> {
     Some(&decor[marker..])
 }
 
+/// Split a decor string into its trailing inline comment (the text of a
+/// `#`/`//` comment whose marker precedes any newline — it documents the
+/// element on the line *before* this decor) and the remainder with that
+/// comment's first line removed. Any genuine own-line comments that followed it
+/// are preserved in the returned remainder. When there is no trailing inline
+/// comment, the input is returned unchanged as the remainder.
+fn split_trailing_inline_comment(decor: &str) -> (Option<String>, String) {
+    match trailing_inline_comment(decor) {
+        None => (None, decor.to_string()),
+        Some(from_marker) => {
+            let marker_pos = decor.len() - from_marker.len();
+            let line_end = from_marker
+                .find('\n')
+                .map(|n| marker_pos + n)
+                .unwrap_or(decor.len());
+            let comment = decor[marker_pos..line_end].trim_end().to_string();
+            let mut rest = decor[..marker_pos].to_string();
+            rest.push_str(&decor[line_end..]);
+            (Some(comment), rest)
+        }
+    }
+}
+
 /// Extract a sort key from a structure. For attributes this is the key name,
 /// for blocks it is the ident followed by labels separated by null bytes.
 fn sort_key(structure: &Structure) -> String {
@@ -914,8 +937,20 @@ fn normalize_array_blank_lines(arr: &mut Array, depth: usize) {
             // Only rewrite elements that start their own line; leave the rare
             // inline element untouched.
             if prefix.contains('\n') {
-                let comments = extract_comments(&prefix);
-                let mut new_prefix = String::from("\n");
+                // A trailing inline comment lives in this element's prefix
+                // because the array comma renders between the previous element
+                // and this decor. Keep it on the first line (issue #75) so it
+                // stays attached to the previous element rather than being
+                // hoisted onto its own line as a false leading comment. Only
+                // genuine own-line comments become leading lines here.
+                let (inline, rest) = split_trailing_inline_comment(&prefix);
+                let comments = extract_comments(&rest);
+                let mut new_prefix = String::new();
+                if let Some(comment) = &inline {
+                    new_prefix.push(' ');
+                    new_prefix.push_str(comment);
+                }
+                new_prefix.push('\n');
                 for comment in &comments {
                     push_comment(&mut new_prefix, comment, &inner_indent);
                 }
@@ -935,9 +970,19 @@ fn normalize_array_blank_lines(arr: &mut Array, depth: usize) {
         }
     }
 
+    // The last element's trailing comment lives in the array's trailing decor
+    // (it renders after that element's comma). Keep it on the first line so it
+    // stays attached to the last element instead of drifting onto its own line
+    // above the closing `]` (issue #75).
     let trailing = arr.trailing().to_string();
-    let comments = extract_comments(&trailing);
-    let mut new_trailing = String::from("\n");
+    let (inline, rest) = split_trailing_inline_comment(&trailing);
+    let comments = extract_comments(&rest);
+    let mut new_trailing = String::new();
+    if let Some(comment) = &inline {
+        new_trailing.push(' ');
+        new_trailing.push_str(comment);
+    }
+    new_trailing.push('\n');
     for comment in &comments {
         push_comment(&mut new_trailing, comment, &inner_indent);
     }
