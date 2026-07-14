@@ -124,7 +124,7 @@ tf-format can be used as a [pre-commit](https://pre-commit.com) or [prek](https:
 ```yaml
 repos:
 - repo: https://github.com/alisonjenkins/tf-format
-  rev: v0.5.1  # pin to a release tag
+  rev: v0.5.2  # pin to a release tag
   hooks:
   - id: tf-format
 ```

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.2](https://github.com/alisonjenkins/tf-format/compare/v0.5.1...v0.5.2) (2026-07-14)
+
+
+### Bug Fixes
+
+* **formatter:** decode string escapes in data-loss guard ([1cca5d9](https://github.com/alisonjenkins/tf-format/commit/1cca5d97f5c42a03218aec8d91bc5d59c83d85cc)), closes [#80](https://github.com/alisonjenkins/tf-format/issues/80)
+
 ## [0.5.1](https://github.com/alisonjenkins/tf-format/compare/v0.5.0...v0.5.1) (2026-07-01)
 
 
