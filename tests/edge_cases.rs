@@ -337,6 +337,48 @@ fn benign_whitespace_normalization_does_not_refuse() {
 }
 
 #[test]
+fn benign_escape_normalization_does_not_refuse() {
+    // Regression (issue #80): hcl-edit decodes string escape sequences at
+    // parse time (`\u00e9` → `é`, `\/` → `/`) and re-escapes only control
+    // chars, `\"` and `\\` on encode — so a valid escape's raw token changes
+    // on round-trip with no data loss. The data-loss guard compared raw
+    // non-whitespace tokens and refused these VALID files with a misleading
+    // duplicate-keys error. They must format successfully.
+    for input in [
+        "locals {\n  label = \"caf\\u00e9\"\n}\n", // the issue's minimal repro
+        "a = \"\\u0041BC\"\n",
+        "a = \"\\U0001F600\"\n",
+        "a = \"a\\/b\"\n",
+        "a = \"pre${var.x}\\u00e9post\"\n", // escape in a template literal part
+        "a = \"a\\\\u0041\"\n",             // escaped backslash — NOT a `\u` escape
+    ] {
+        for opts in [FormatOptions::opinionated(), FormatOptions::minimal()] {
+            let out = match format_hcl_with(input, &opts) {
+                Ok(out) => out,
+                Err(e) => panic!("{:?}: refused valid input {input:?}: {e:?}", opts.style),
+            };
+            // And the result must be a fixpoint.
+            let twice = match format_hcl_with(&out, &opts) {
+                Ok(twice) => twice,
+                Err(e) => panic!(
+                    "{:?}: second format failed for {input:?}: {e:?}",
+                    opts.style
+                ),
+            };
+            assert_eq!(twice, out, "{:?}: not idempotent for {input:?}", opts.style);
+        }
+    }
+
+    // The escaped-backslash case must keep its backslash verbatim: `\\u0041`
+    // is a literal `\` followed by the text `u0041`, not a unicode escape.
+    let out = fmt("a = \"a\\\\u0041\"\n");
+    assert!(
+        out.contains("\\\\u0041"),
+        "escaped backslash was decoded: {out:?}"
+    );
+}
+
+#[test]
 fn invalid_hcl_returns_typed_parse_error() {
     // An unparseable input must surface a typed error, not panic.
     let err = match format_hcl("variable \"a\" {") {

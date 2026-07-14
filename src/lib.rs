@@ -93,19 +93,25 @@ pub fn format_hcl_with(input: &str, opts: &FormatOptions) -> Result<String, Form
     // means formatting would corrupt data. Refuse instead. (Duplicate object
     // keys are invalid Terraform anyway: `terraform validate` rejects them.)
     //
-    // The comparison is whitespace-insensitive: hcl-edit does NOT round-trip
-    // byte-identically — it normalizes interior whitespace it has no decor slot
-    // for (e.g. `a . b . c` → `a.b.c`, tabs/newlines around operators) and does
-    // not preserve CRLF. Those are benign (and match `tofu fmt`); only a
-    // difference in the non-whitespace tokens is real data loss. A blunt
-    // byte-compare here used to refuse valid files with a misleading
-    // duplicate-keys error. Strings, heredoc bodies and comments are preserved
-    // verbatim on both sides, so stripping whitespace from both cannot mask a
-    // structural change (a dropped entry leaves its non-whitespace tokens
-    // missing).
-    let without_whitespace =
-        |s: &str| -> String { s.chars().filter(|c| !c.is_whitespace()).collect() };
-    if without_whitespace(&body.to_string()) != without_whitespace(input) {
+    // The comparison normalizes the two benign ways hcl-edit's round-trip
+    // rewrites tokens without losing data, so only a *structural* mismatch
+    // remains (a blunt comparison here used to refuse valid files with a
+    // misleading duplicate-keys error):
+    //
+    //  1. Whitespace: hcl-edit normalizes interior whitespace it has no decor
+    //     slot for (e.g. `a . b . c` → `a.b.c`, tabs/newlines around
+    //     operators) and does not preserve CRLF. Both sides are compared with
+    //     all whitespace stripped.
+    //  2. String escape sequences: the parser decodes escapes (`\u00e9` → `é`,
+    //     `\/` → `/`) and the encoder re-escapes only control characters, `\"`
+    //     and `\\` — so a valid escape's raw token changes on round-trip with
+    //     no data loss (issue #80). Both sides are compared with escapes
+    //     decoded the way hcl-edit's parser decodes them.
+    //
+    // Heredoc bodies and comments are preserved verbatim on both sides, so
+    // applying the same normalization to both cannot mask a structural change
+    // (a dropped entry leaves its non-whitespace tokens missing).
+    if normalize_for_loss_check(&body.to_string()) != normalize_for_loss_check(input) {
         return Err(FormatError::LossyParse);
     }
 
@@ -114,6 +120,88 @@ pub fn format_hcl_with(input: &str, opts: &FormatOptions) -> Result<String, Form
     formatter::sort_top_level(&mut body, opts.style);
 
     Ok(post_process(&body.to_string(), opts.style))
+}
+
+/// Normalize a source text for the data-loss comparison in
+/// [`format_hcl_with`]: decode HCL string escape sequences the way hcl-edit's
+/// parser does, and drop all whitespace. Applied identically to both sides of
+/// the comparison, so hcl-edit's escape normalization (decode-on-parse,
+/// minimal re-escape-on-encode) no longer registers as a token difference,
+/// while real data loss (dropped tokens) still does.
+///
+/// The decoder mirrors hcl-edit's `escaped_char` parser: `\n \r \t \\ \" \/
+/// \b \f`, `\u` + exactly 4 hex digits, `\U` + exactly 8 hex digits. An
+/// invalid escape is kept verbatim — inside a quoted string it would have
+/// been a parse error before we got here, so it can only occur in comments
+/// and heredoc bodies, which hcl-edit round-trips verbatim.
+fn normalize_for_loss_check(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c.is_whitespace() {
+            continue;
+        }
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        let Some(&next) = chars.peek() else {
+            out.push('\\');
+            continue;
+        };
+        match next {
+            // Decoded char is whitespace — dropped like any other whitespace.
+            'n' | 'r' | 't' => {
+                chars.next();
+            }
+            // NB: consuming the pair here is what keeps `\\u0041` (escaped
+            // backslash, then literal text) from being read as a `\u` escape.
+            '\\' | '"' | '/' => {
+                chars.next();
+                out.push(next);
+            }
+            'b' => {
+                chars.next();
+                out.push('\u{08}');
+            }
+            'f' => {
+                chars.next();
+                out.push('\u{0C}');
+            }
+            'u' | 'U' => {
+                let len = if next == 'u' { 4 } else { 8 };
+                // Parse on a lookahead clone so an invalid sequence consumes
+                // nothing and falls through verbatim.
+                let mut lookahead = chars.clone();
+                lookahead.next(); // the `u` / `U`
+                let mut hex = String::with_capacity(len);
+                while hex.len() < len {
+                    match lookahead.peek() {
+                        Some(&h) if h.is_ascii_hexdigit() => {
+                            hex.push(h);
+                            lookahead.next();
+                        }
+                        _ => break,
+                    }
+                }
+                let decoded = (hex.len() == len)
+                    .then(|| u32::from_str_radix(&hex, 16).ok())
+                    .flatten()
+                    .and_then(char::from_u32);
+                match decoded {
+                    Some(ch) => {
+                        chars = lookahead;
+                        if !ch.is_whitespace() {
+                            out.push(ch);
+                        }
+                    }
+                    None => out.push('\\'),
+                }
+            }
+            _ => out.push('\\'),
+        }
+    }
+    out
 }
 
 /// Post-process the formatted output: strip trailing whitespace from each line
