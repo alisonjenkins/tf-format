@@ -84,7 +84,7 @@ these were caught: re-indentation of mangled input is never exercised.
 | PAR-7 interior expression spacing (`a=1+2`, `f( 1 ,2 )`) | known gap, open |
 | PAR-8 net-zero bracket lines (`}, {`, `], [`, `[for … : {`) mis-indented; per-node heuristics vs tofu bracket stack | fixed |
 | PAR-9 multi-line `"${f({…})}"` interpolation: tofu unwraps to `(f({…}))` | open, low |
-| PAR-10 minimal mode drops blank lines that follow an own-line comment (and leading file blanks) | open |
+| PAR-10 minimal mode drops blank lines that follow an own-line comment (and leading file blanks) | fixed |
 
 ### PAR-1 — Block closing `}` never re-indented (both modes)
 `src/formatter.rs` `format_body` clones the body decor and restores it verbatim;
@@ -213,6 +213,20 @@ tofu keeps the blank before `output`; tf-format deletes it. Same inside blocks, 
 → In minimal mode rebuild each prefix from a `(blank_lines_before, comment)` segment list plus
 a trailing blank count (PAR-1's `parse_suffix_lines` already does this parse for suffixes);
 opinionated mode keeps its collapse-to-one policy.
+
+**Fixed.** All four slots now parse into `(blank_lines_before, comment)` segments plus a
+trailing blank count and re-render with `render_suffix_segments`, reusing PAR-1's
+`parse_suffix_lines`. A second, related bug surfaced while fixing this: the group-boundary
+"restore a missing blank" bump (`want_group_blank`) assumed the blank a group split detected
+always sat *before* the group's first structure — but `split_body_groups`/`split_object_groups`
+only check whether a structure's prefix contains a blank *anywhere*, so a structure whose
+comments are immediately followed by the real blank (comment glued to the previous line, blank
+after the comment) got a second, spurious blank inserted before its comments. Removed the bump
+entirely: the segment parse already recovers the blank wherever the author put it, so nothing
+needs restoring. `scripts/parity-check.sh` against terraform-aws-modules/vpc, eks and
+cloudposse eks-cluster now reports 0/3/2 mismatches (was 156/156-ish before); the residual 3+2
+are pre-existing bracket-stack indentation issues unrelated to blank lines (adjacent to
+PAR-8/PAR-9), not this bug.
 
 ### Test gap
 Add a "mangled" parity lane: fixtures with deliberately wrong indentation, tabs, and comment
