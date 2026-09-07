@@ -2,6 +2,7 @@ use hcl_edit::expr::{
     Array, Expression, Object, ObjectKey, ObjectValueAssignment, ObjectValueTerminator,
 };
 use hcl_edit::structure::{Body, Structure};
+use hcl_edit::template::{Directive, Element};
 use hcl_edit::{Decor, Decorate};
 use std::borrow::Cow;
 
@@ -1134,8 +1135,130 @@ fn format_expression(expr: &mut Expression, depth: usize, style: FormatStyle, pr
             format_expression(&mut op.lhs_expr, depth, style, 0);
             format_expression(&mut op.rhs_expr, depth, style, 0);
         }
+        Expression::StringTemplate(template) => {
+            for element in template.iter_mut() {
+                format_template_element(element, depth, style);
+            }
+        }
+        Expression::HeredocTemplate(heredoc) => {
+            for element in heredoc.template.iter_mut() {
+                format_template_element(element, depth, style);
+            }
+        }
         // Leaf expressions (Null, Bool, Number, String, Variable, etc.)
         _ => {}
+    }
+}
+
+/// Clears the whitespace `terraform fmt` / `tofu fmt` strip from just inside a
+/// `${ … }` interpolation or `%{ … }` directive marker, unless the gap spans
+/// multiple lines (a directive whose expression is written across lines keeps
+/// its original layout — this normalization is horizontal-only).
+///
+/// Returns `None` when the gap should be left untouched.
+fn normalize_template_gap(current: &str) -> Option<&'static str> {
+    if current.contains('\n') {
+        None
+    } else {
+        Some("")
+    }
+}
+
+/// Force one side of an expression's decor to `desired`, unless the existing
+/// text spans multiple lines (in which case the source layout is preserved).
+fn set_template_expr_gap(decor: &mut Decor, set_suffix: bool, desired: &str) {
+    let current = if set_suffix {
+        decor.suffix()
+    } else {
+        decor.prefix()
+    }
+    .map(|s| s.to_string())
+    .unwrap_or_default();
+
+    if current.contains('\n') {
+        return;
+    }
+
+    if set_suffix {
+        decor.set_suffix(desired);
+    } else {
+        decor.set_prefix(desired);
+    }
+}
+
+/// Recursively normalize the interior spacing of one template element
+/// (interpolation or directive), matching `terraform fmt` / `tofu fmt`.
+/// Literal text is left untouched — this only ever touches the decor around
+/// `${`/`%{` markers and directive keywords, which is what preserves heredoc
+/// body whitespace verbatim.
+fn format_template_element(element: &mut Element, depth: usize, style: FormatStyle) {
+    match element {
+        Element::Literal(_) => {}
+        Element::Interpolation(interp) => {
+            set_template_expr_gap(interp.expr.decor_mut(), false, "");
+            set_template_expr_gap(interp.expr.decor_mut(), true, "");
+            format_expression(&mut interp.expr, depth, style, 0);
+        }
+        Element::Directive(dir) => format_template_directive(dir, depth, style),
+    }
+}
+
+fn format_template_directive(dir: &mut Directive, depth: usize, style: FormatStyle) {
+    match dir {
+        Directive::If(if_dir) => {
+            if let Some(gap) = normalize_template_gap(if_dir.if_expr.preamble()) {
+                if_dir.if_expr.set_preamble(gap);
+            }
+            set_template_expr_gap(if_dir.if_expr.cond_expr.decor_mut(), false, " ");
+            set_template_expr_gap(if_dir.if_expr.cond_expr.decor_mut(), true, "");
+            format_expression(&mut if_dir.if_expr.cond_expr, depth, style, 0);
+            for element in if_dir.if_expr.template.iter_mut() {
+                format_template_element(element, depth, style);
+            }
+
+            if let Some(else_expr) = &mut if_dir.else_expr {
+                if let Some(gap) = normalize_template_gap(else_expr.preamble()) {
+                    else_expr.set_preamble(gap);
+                }
+                if let Some(gap) = normalize_template_gap(else_expr.trailing()) {
+                    else_expr.set_trailing(gap);
+                }
+                for element in else_expr.template.iter_mut() {
+                    format_template_element(element, depth, style);
+                }
+            }
+
+            if let Some(gap) = normalize_template_gap(if_dir.endif_expr.preamble()) {
+                if_dir.endif_expr.set_preamble(gap);
+            }
+            if let Some(gap) = normalize_template_gap(if_dir.endif_expr.trailing()) {
+                if_dir.endif_expr.set_trailing(gap);
+            }
+        }
+        Directive::For(for_dir) => {
+            if let Some(gap) = normalize_template_gap(for_dir.for_expr.preamble()) {
+                for_dir.for_expr.set_preamble(gap);
+            }
+            if let Some(key_var) = &mut for_dir.for_expr.key_var {
+                set_template_expr_gap(key_var.decor_mut(), false, " ");
+                set_template_expr_gap(key_var.decor_mut(), true, "");
+            }
+            set_template_expr_gap(for_dir.for_expr.value_var.decor_mut(), false, " ");
+            set_template_expr_gap(for_dir.for_expr.value_var.decor_mut(), true, " ");
+            set_template_expr_gap(for_dir.for_expr.collection_expr.decor_mut(), false, " ");
+            set_template_expr_gap(for_dir.for_expr.collection_expr.decor_mut(), true, "");
+            format_expression(&mut for_dir.for_expr.collection_expr, depth, style, 0);
+            for element in for_dir.for_expr.template.iter_mut() {
+                format_template_element(element, depth, style);
+            }
+
+            if let Some(gap) = normalize_template_gap(for_dir.endfor_expr.preamble()) {
+                for_dir.endfor_expr.set_preamble(gap);
+            }
+            if let Some(gap) = normalize_template_gap(for_dir.endfor_expr.trailing()) {
+                for_dir.endfor_expr.set_trailing(gap);
+            }
+        }
     }
 }
 
