@@ -435,3 +435,11 @@ fn fixture_array_reindent() {
     // trailing comma).
     run_fixture("array_reindent");
 }
+
+#[test]
+fn fixture_expr_reindent() {
+    // PAR-4: misindented func-call args, a parenthesized expression, a
+    // ternary's branches, and for-expression lines are all re-indented to
+    // the canonical columns.
+    run_fixture("expr_reindent");
+}

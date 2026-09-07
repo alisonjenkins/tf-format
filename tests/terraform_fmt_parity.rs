@@ -707,3 +707,44 @@ fn parity_array_reindent() {
 "#;
     check_parity_minimal("array_reindent", input);
 }
+
+#[test]
+fn parity_expr_reindent() {
+    // PAR-4: minimal mode must re-indent misindented func-call args, a
+    // parenthesized expression, a ternary's branches, and for-expression
+    // lines exactly like `tofu fmt`.
+    let input = r#"locals {
+  m = merge(
+        var.a,
+    {
+        k = 1
+    },
+      var.b
+    )
+  n = concat(var.a,
+    var.b)
+  a = var.x ? {
+      k = 1
+  } : {
+      k = 2
+  }
+  b = (
+      var.x
+  )
+  c = [
+      for k, v in var.m :
+        upper(k)
+      if v
+  ]
+  d = {
+      for k, v in var.m : k => {
+          v = v
+      }
+  }
+  e = var.x ? [
+    1,
+  ] : []
+}
+"#;
+    check_parity_minimal("expr_reindent", input);
+}
