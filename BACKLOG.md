@@ -80,7 +80,7 @@ these were caught: re-indentation of mangled input is never exercised.
 | PAR-3 minimal mode never re-indents array interiors | open |
 | PAR-4 func-call / conditional / paren / for-expr lines never re-indented | open |
 | PAR-5 template directive and interpolation spacing not normalised | fixed |
-| PAR-6 object opened with first entry on the brace line: exploded + non-idempotent | open |
+| PAR-6 object opened with first entry on the brace line: exploded + non-idempotent | fixed |
 | PAR-7 interior expression spacing (`a=1+2`, `f( 1 ,2 )`) | known gap, open |
 
 ### PAR-1 — Block closing `}` never re-indented (both modes)
