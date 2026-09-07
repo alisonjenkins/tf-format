@@ -379,6 +379,113 @@ fn blank_after_comments(prefix: &str) -> bool {
     raw_newlines > comment_newlines
 }
 
+/// Walk the lines of a closing decor suffix (with any disposable trailing
+/// placeholder line already removed by the caller) into `(blank_lines_before,
+/// comment)` segments plus a trailing blank-line count.
+///
+/// The Body encoder always emits a `\n` after the last structure itself, so
+/// a leading blank line here is genuine (unlike a structure prefix, where one
+/// leading `\n` is the structural line break).
+fn parse_suffix_lines(lines: Vec<&str>) -> (Vec<(usize, String)>, usize) {
+    let mut segments: Vec<(usize, String)> = Vec::new();
+    let mut blank_run = 0usize;
+    let mut iter = lines.into_iter();
+    while let Some(line) = iter.next() {
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() {
+            blank_run += 1;
+        } else if trimmed.starts_with('#') || trimmed.starts_with("//") {
+            segments.push((blank_run, line.trim().to_string()));
+            blank_run = 0;
+        } else if trimmed.starts_with("/*") {
+            let base_indent = leading_ws_len(line);
+            let mut block = trimmed.trim_end().to_string();
+            if !trimmed.contains("*/") {
+                for cont in iter.by_ref() {
+                    block.push('\n');
+                    block.push_str(dedent(cont, base_indent).trim_end());
+                    if cont.contains("*/") {
+                        break;
+                    }
+                }
+            }
+            segments.push((blank_run, block));
+            blank_run = 0;
+        }
+        // Anything else is stray indentation from a mis-formatted `}` line;
+        // it carries no content and is dropped.
+    }
+    (segments, blank_run)
+}
+
+/// Parse a block body's closing decor *suffix* — the text between the last
+/// structure and the closing `}` — into `(blank_lines_before, comment)`
+/// segments plus a trailing blank-line count before the brace.
+///
+/// The final element of `suffix.split('\n')` is always the (possibly
+/// mis-indented) whitespace run immediately before the `}`: a block's suffix
+/// is guaranteed to end in indentation, never in comment text, since a `}`
+/// can only follow a comment after a line break. It carries no line-break
+/// information of its own, so it is dropped rather than parsed.
+fn parse_closing_suffix(suffix: &str) -> (Vec<(usize, String)>, usize) {
+    let suffix = suffix.replace('\r', "");
+    let mut lines: Vec<&str> = suffix.split('\n').collect();
+    lines.pop();
+    parse_suffix_lines(lines)
+}
+
+/// Parse the file-level body's trailing decor suffix — the text between the
+/// last top-level structure and EOF — the same way as [`parse_closing_suffix`],
+/// except there is no `}` to guarantee a disposable trailing placeholder line.
+/// When the source file has no final newline, the last line is the tail end
+/// of real content (e.g. a trailing comment) and must be parsed, not dropped.
+fn parse_trailing_suffix(suffix: &str) -> (Vec<(usize, String)>, usize) {
+    let suffix = suffix.replace('\r', "");
+    let mut lines: Vec<&str> = suffix.split('\n').collect();
+    if suffix.ends_with('\n') {
+        lines.pop();
+    }
+    parse_suffix_lines(lines)
+}
+
+/// Rebuild a body's closing decor suffix so the brace/EOF placeholder and any
+/// own-line comments sit at the correct indentation, instead of restoring the
+/// author's (possibly mis-indented) whitespace verbatim. Blank-line counts —
+/// both before each comment and immediately before the brace — are preserved
+/// exactly, matching `tofu fmt`, which never inserts or collapses them.
+fn rebuild_closing_suffix(old_suffix: &str, comment_indent: &str, tail_indent: &str) -> String {
+    let (segments, trailing_blank) = parse_closing_suffix(old_suffix);
+    render_suffix_segments(&segments, trailing_blank, comment_indent, tail_indent)
+}
+
+/// Rebuild the file-level body's trailing decor suffix (a trailing top-level
+/// comment and/or its leading blank-line spacing before EOF) at column 0,
+/// instead of restoring the author's original indentation verbatim.
+fn rebuild_trailing_suffix(old_suffix: &str) -> String {
+    let (segments, trailing_blank) = parse_trailing_suffix(old_suffix);
+    render_suffix_segments(&segments, trailing_blank, "", "")
+}
+
+fn render_suffix_segments(
+    segments: &[(usize, String)],
+    trailing_blank: usize,
+    comment_indent: &str,
+    tail_indent: &str,
+) -> String {
+    let mut result = String::new();
+    for (blanks, comment) in segments {
+        for _ in 0..*blanks {
+            result.push('\n');
+        }
+        push_comment(&mut result, comment, comment_indent);
+    }
+    for _ in 0..trailing_blank {
+        result.push('\n');
+    }
+    result.push_str(tail_indent);
+    result
+}
+
 /// Build a prefix for a body structure. The Body/Block encoding adds `\n`
 /// between structures, so the prefix only needs indent (and optionally an
 /// extra `\n` for a blank line separator).
@@ -527,6 +634,14 @@ pub fn format_body(body: &mut Body, depth: usize, parent_ident: Option<&str>, st
     let old_body = std::mem::take(body);
     let mut structures: Vec<Structure> = old_body.into_iter().collect();
 
+    // A body renders on one line (no re-indentable closing brace) only when
+    // hcl-edit will actually take the oneline path: empty, or exactly one
+    // attribute, with `prefer_oneline` set. Any other body always renders
+    // its closing `}` on its own line and needs the suffix rebuilt below.
+    let oneline_render = prefer_oneline
+        && (structures.is_empty()
+            || (structures.len() == 1 && matches!(structures[0], Structure::Attribute(_))));
+
     // Recurse into nested blocks and expressions. Nested blocks normally pass
     // `None` for parent_ident — hoisting is suppressed below the top level —
     // except `dynamic`, whose iteration args are hoisted at any depth
@@ -577,8 +692,20 @@ pub fn format_body(body: &mut Body, depth: usize, parent_ident: Option<&str>, st
         );
     }
 
-    // Restore body-level metadata
-    *body.decor_mut() = body_decor;
+    // Restore body-level metadata. The closing suffix (whitespace + any
+    // own-line comments between the last structure and `}`) is rebuilt
+    // rather than restored verbatim, so a mis-indented or tab-indented `}`
+    // gets re-indented to the block's depth (comments to depth+1) instead of
+    // surviving untouched — see PAR-1.
+    *body.decor_mut() = body_decor.clone();
+    if !oneline_render {
+        let old_suffix = body_decor
+            .suffix()
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+        let new_suffix = rebuild_closing_suffix(&old_suffix, &indent, &"  ".repeat(depth));
+        body.decor_mut().set_suffix(new_suffix);
+    }
     body.set_prefer_oneline(prefer_oneline);
     body.set_prefer_omit_trailing_newline(prefer_omit_trailing_newline);
 }
@@ -2056,7 +2183,16 @@ pub fn sort_top_level(body: &mut Body, style: FormatStyle) {
         }
     }
 
-    *body.decor_mut() = body_decor;
+    // Rebuild the trailing suffix (a trailing file-level comment and/or its
+    // leading blank-line spacing) at column 0 instead of restoring the
+    // author's original indentation verbatim — see PAR-1.
+    *body.decor_mut() = body_decor.clone();
+    let old_suffix = body_decor
+        .suffix()
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+    let new_suffix = rebuild_trailing_suffix(&old_suffix);
+    body.decor_mut().set_suffix(new_suffix);
     body.set_prefer_oneline(prefer_oneline);
     body.set_prefer_omit_trailing_newline(prefer_omit_trailing_newline);
 }

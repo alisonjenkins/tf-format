@@ -271,6 +271,15 @@ fn fixture_single_line_block() {
 }
 
 #[test]
+fn fixture_closing_brace_reindent() {
+    // PAR-1: a body's closing decor suffix used to be restored verbatim, so
+    // a mis-indented / tab-indented `}`, an own-line comment before it, and
+    // a trailing top-level comment all kept their original (wrong) column.
+    // expected.tf is real `tofu fmt` output.
+    run_minimal_fixture("closing_brace_reindent");
+}
+
+#[test]
 fn fixture_for_expr_colon_spacing() {
     // `terraform fmt` parity: squished for-expression separators
     // (`var.x:x`, `k=>v`) gain a single space around `:` and `=>`.

@@ -609,6 +609,19 @@ EOT
     check_parity_minimal("template_directive_spacing", input);
 }
 
+#[test]
+fn parity_closing_brace_reindent() {
+    // PAR-1: `format_body` / `sort_top_level` used to restore a body's
+    // closing decor suffix verbatim, so a mis-indented or tab-indented `}`
+    // (and any own-line comment sitting before it) survived formatting
+    // untouched. `tofu fmt` re-indents the `}` to the block's depth, an
+    // own-line comment before it to depth+1, and a trailing top-level
+    // comment to column 0 — while still preserving the exact blank-line
+    // count the author wrote before the brace.
+    let input = "resource \"a\" \"b\" {\n  nested {\n    w = 1\n      }\n  other {\n    w = 1\n}\n    }\n\n   # file tail\n";
+    check_parity_minimal("closing_brace_reindent", input);
+}
+
 /// Sweep every minimal-mode fixture's `input.tf` through real `tofu fmt`
 /// so the minimal style is validated against the actual formatter, not only
 /// against hand-written `expected.tf` files. Catches any minimal-mode
