@@ -82,7 +82,7 @@ these were caught: re-indentation of mangled input is never exercised.
 | PAR-5 template directive and interpolation spacing not normalised | fixed |
 | PAR-6 object opened with first entry on the brace line: exploded + non-idempotent | fixed |
 | PAR-7 interior expression spacing (`a=1+2`, `f( 1 ,2 )`) | known gap, open |
-| PAR-8 net-zero bracket lines (`}, {`, `], [`, `[for … : {`) mis-indented; per-node heuristics vs tofu bracket stack | open |
+| PAR-8 net-zero bracket lines (`}, {`, `], [`, `[for … : {`) mis-indented; per-node heuristics vs tofu bracket stack | fixed |
 | PAR-9 multi-line `"${f({…})}"` interpolation: tofu unwraps to `(f({…}))` | open, low |
 
 ### PAR-1 — Block closing `}` never re-indented (both modes)
