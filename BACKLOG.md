@@ -65,6 +65,94 @@ lines** (violated Rule #8, broke idempotence) — fixed in `b624d5d`.
 
 ---
 
+## Parity audit 2026-09-07 — `tofu fmt` / `terraform fmt` divergences
+
+Differential run of `tf-format --style minimal --stdin` against OpenTofu 1.11.8 and
+Terraform 1.15.3 over a 25-file corpus of deliberately mangled input. tofu and terraform
+agreed on every file; every item below is tf-format vs both. The existing minimal fixtures
+and `scripts/parity-check.sh` only feed already-canonical input, which is why none of
+these were caught: re-indentation of mangled input is never exercised.
+
+| Item | Status |
+|------|--------|
+| PAR-1 block closing `}` never re-indented | open |
+| PAR-2 trailing-comment alignment runs too narrow | open |
+| PAR-3 minimal mode never re-indents array interiors | open |
+| PAR-4 func-call / conditional / paren / for-expr lines never re-indented | open |
+| PAR-5 template directive and interpolation spacing not normalised | open |
+| PAR-6 object opened with first entry on the brace line: exploded + non-idempotent | open |
+| PAR-7 interior expression spacing (`a=1+2`, `f( 1 ,2 )`) | known gap, open |
+
+### PAR-1 — Block closing `}` never re-indented (both modes)
+`src/formatter.rs` `format_body` clones the body decor and restores it verbatim;
+`sort_top_level` does the same for the file body. hcl-edit stores the whitespace (and any
+own-line comments) before `}` in that body suffix, so `nested {\n    w = 1\n      }` keeps
+`}` at column 6 (tofu: column 2), tabs survive, and a trailing `   # file comment` after the
+last top-level block keeps its indent (tofu: column 0).
+→ Rebuild the body suffix: extracted comments re-indented at `depth+1`, then
+`"  ".repeat(depth)` for the brace (empty string at top level).
+
+### PAR-2 — Trailing-comment alignment runs too narrow (both modes)
+tofu/terraform align `#` / `//` trailing comments across *every* run of consecutive
+comment-bearing lines regardless of structure: `a = 1 # c` / `b = { # c` / `} # c` /
+`nested { # c` / `] # c` all share one column. tf-format only aligns inside a run of
+single-line attributes (`align_body_attribute_comments`), object entries, or array elements;
+a multi-line value, an opener, a closer, or a block header breaks the run. Repro:
+```hcl
+locals {
+  e = 5 # c5
+  f = { # c6
+  }
+}
+```
+tofu → `f = {        # c6`; tf-format → `f = { # c6`.
+→ hclwrite does this as a line-based pass after indentation. A `post_process`-level pass
+over comment-masked lines (see `mask_comments`) that aligns consecutive trailing comments to
+the widest content width + 1 would match; heredoc bodies and comment-only lines must be
+excluded. Verify each shape against real `tofu fmt`.
+
+### PAR-3 — Minimal mode never re-indents array interiors
+Elements, own-line comments inside `[ ]`, and the closing `]` keep source indentation
+(including tabs). `normalize_array_blank_lines` performs this rewrite but only runs under
+Opinionated. tofu re-indents all three.
+→ Split the re-indent (prefix rebuild at `depth+1`, trailing rebuild at `depth`) from the
+opinionated blank-line stripping so minimal mode can run the former while preserving blank
+lines and comma style.
+
+### PAR-4 — Func-call args, conditional branches, paren bodies, for-expr lines never re-indented (both modes)
+`format_expression` for `FuncCall` / `Conditional` / `Parenthesis` / `ForExpr` only recurses;
+continuation-line prefixes and closing `)` are left as written. Repro:
+`m = merge(\n        var.a,\n    var.b\n    )` stays mis-indented; tofu → 4/4/2. Same for
+`for k, v in var.m :` lines inside `[`/`{`, and a `} : {` mid-conditional.
+→ For every decor prefix that contains a newline, rebuild it as `\n` + comments +
+`"  ".repeat(depth+1)` (closer at `depth`), preserving blank-line counts in minimal mode.
+
+### PAR-5 — Template directive / interpolation spacing not normalised
+tofu rewrites `"${ var.x }-y"` → `"${var.x}-y"`, `"%{ if x ~}a%{ endif }"` →
+`"%{if x~}a%{endif}"`, and applies the same inside heredoc bodies. tf-format leaves
+`StringTemplate` / `HeredocTemplate` verbatim.
+→ Walk template elements and clear the interpolation / directive interior decor.
+Beware: `post_process` treats heredoc bodies as opaque, so this must happen at the AST level.
+
+### PAR-6 — Object with first entry on the brace line: exploded and non-idempotent
+Input `b = {a = 1,\n  bb = 2}`: tofu → `b = { a = 1,\n  bb = 2 }`. tf-format moves `a` to
+its own line and emits `bb = 2  }`; a second pass yields `bb = 2    }` — padding grows each
+run. Cause: `format_object` builds the closing trailing from an `old_trailing` with no `\n`,
+and `=` alignment pads the suffix again.
+→ Detect a first entry with no newline in its prefix and keep it on the brace line; make the
+closing trailing a fixed single space when the last entry has no newline before `}`.
+
+### PAR-7 — Interior expression spacing (known gap)
+`a=1+2`, `[1,2 ,3]`, `f( 1 ,2 )`, `b?c:d`, `x .y. z`, `( b )` are left as written in
+minimal mode; tofu normalises all of them. Large surface (every `Expression` variant's
+inner decor); tracked, not scheduled.
+
+### Test gap
+Add a "mangled" parity lane: fixtures with deliberately wrong indentation, tabs, and comment
+chains, asserted byte-equal to real `tofu fmt` output and idempotent on the second pass.
+
+---
+
 ## P0 — data loss / corruption
 
 ### BUG-1 — Multi-line `/* */` block comments mangled or dropped during reorder → unparseable output
