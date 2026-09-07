@@ -1061,48 +1061,152 @@ fn split_body_groups(structures: Vec<Structure>) -> Vec<Vec<Structure>> {
     groups
 }
 
-/// Opinionated: remove every blank line from a multi-line array — both between
-/// elements and immediately before the closing `]` (issue #35). Each element's
-/// prefix is rebuilt as a single newline + indent (comments preserved), and the
-/// array's trailing whitespace is collapsed so `]` sits on its own line with no
-/// preceding blank line. `terraform fmt` / `tofu fmt` preserve these blanks, so
-/// this never runs under [`FormatStyle::Minimal`].
-fn normalize_array_blank_lines(arr: &mut Array, depth: usize) {
-    let inner_indent = "  ".repeat(depth + 1);
-    let closing_indent = "  ".repeat(depth);
+/// Rebuild a multi-line decor string (an element/argument prefix, or the
+/// trailing whitespace before a closing bracket) at `indent`, preserving any
+/// comments it carries. A trailing inline comment — a `#`/`//` marker with no
+/// newline before it — stays on the first line (issue #75) so it remains
+/// attached to the *previous* line instead of being hoisted onto its own line
+/// as a false leading comment; genuine own-line comments become their own
+/// indented lines.
+///
+/// `preserve_blanks` reproduces the exact blank-line count the author wrote
+/// (`tofu fmt` parity, [`FormatStyle::Minimal`]); when false — the
+/// opinionated style's blank-line policy — every run of blank lines collapses
+/// to the single newline that starts the next line.
+fn reindented_multiline_decor(raw: &str, indent: &str, preserve_blanks: bool) -> String {
+    let (inline, rest) = split_trailing_inline_comment(raw);
+    let comments = extract_comments(&rest);
+    let blanks = if preserve_blanks {
+        count_leading_newlines(&rest).saturating_sub(1)
+    } else {
+        0
+    };
+    let mut new_decor = String::new();
+    if let Some(comment) = &inline {
+        new_decor.push(' ');
+        new_decor.push_str(comment);
+    }
+    for _ in 0..blanks {
+        new_decor.push('\n');
+    }
+    new_decor.push('\n');
+    for comment in &comments {
+        push_comment(&mut new_decor, comment, indent);
+    }
+    new_decor.push_str(indent);
+    new_decor
+}
 
-    for i in 0..arr.len() {
-        if let Some(elem) = arr.get_mut(i) {
+/// A bracketed, comma-separated list of expressions — an [`Array`]'s elements
+/// or a [`hcl_edit::expr::FuncArgs`]'s arguments — abstracted so
+/// [`reindent_bracketed`] can re-indent either one.
+trait ElementList {
+    fn list_len(&self) -> usize;
+    fn list_get_mut(&mut self, index: usize) -> Option<&mut Expression>;
+    fn list_trailing(&self) -> String;
+    fn list_set_trailing(&mut self, trailing: String);
+}
+
+impl ElementList for Array {
+    fn list_len(&self) -> usize {
+        self.len()
+    }
+    fn list_get_mut(&mut self, index: usize) -> Option<&mut Expression> {
+        self.get_mut(index)
+    }
+    fn list_trailing(&self) -> String {
+        self.trailing().to_string()
+    }
+    fn list_set_trailing(&mut self, trailing: String) {
+        self.set_trailing(trailing);
+    }
+}
+
+/// Whitespace text of the last element's decor suffix, or an empty string
+/// when the list is empty.
+fn list_last_suffix<T: ElementList>(list: &mut T) -> String {
+    let len = list.list_len();
+    if len == 0 {
+        return String::new();
+    }
+    list.list_get_mut(len - 1)
+        .and_then(|e| e.decor().suffix().map(|s| s.to_string()))
+        .unwrap_or_default()
+}
+
+/// Whether the closing bracket sits on its own line rather than sharing the
+/// last element/argument's line (used to pick the right recursion depth for
+/// that element's own multi-line content — see [`reindent_bracketed`]).
+fn list_closes_on_own_line<T: ElementList>(list: &mut T) -> bool {
+    list_last_suffix(list).contains('\n') || list.list_trailing().contains('\n')
+}
+
+fn list_set_last_suffix<T: ElementList>(list: &mut T, suffix: String) {
+    let len = list.list_len();
+    if len == 0 {
+        return;
+    }
+    if let Some(elem) = list.list_get_mut(len - 1) {
+        elem.decor_mut().set_suffix(suffix);
+    }
+}
+
+/// Re-indent every own-line element of a bracketed list and its closing
+/// bracket, matching `terraform fmt` / `tofu fmt`'s real behaviour:
+///
+/// - Every own-line element defaults to `depth + 1`, regardless of whether
+///   the *first* element shares the opening bracket's line (`[1,\n  2,\n3]`
+///   still puts `2` at `depth + 1` — issue: PAR-3).
+/// - Whichever line contains the closing bracket renders at `depth` instead,
+///   even when that line also holds the last element (`[1,\n  2,\n3]` — `3]`
+///   sits at `depth` while `2,` above it sits at `depth + 1`).
+///
+/// An element that shares a line with its neighbour (no newline in its own
+/// prefix) is left untouched — `tofu fmt` never moves an inline element onto
+/// its own line. `preserve_blanks` is threaded through to
+/// [`reindented_multiline_decor`].
+///
+/// The whitespace immediately before the closing bracket lives in one of two
+/// places depending on whether the list already ends in a comma: the last
+/// element's own decor suffix when there is no trailing comma (the common
+/// case — see the encoder, which writes that suffix, then an optional
+/// trailing comma, then the list's own `trailing`), or the list's `trailing`
+/// field when there is one. Only the field that actually holds it is
+/// rewritten.
+fn reindent_bracketed<T: ElementList>(list: &mut T, depth: usize, preserve_blanks: bool) {
+    let bumped_indent = "  ".repeat(depth + 1);
+    let base_indent = "  ".repeat(depth);
+    let len = list.list_len();
+    let last_suffix = list_last_suffix(list);
+    let trailing = list.list_trailing();
+    let closes_on_own_line = last_suffix.contains('\n') || trailing.contains('\n');
+
+    for i in 0..len {
+        if let Some(elem) = list.list_get_mut(i) {
             let prefix = elem
                 .decor()
                 .prefix()
                 .map(|p| p.to_string())
                 .unwrap_or_default();
-            // Only rewrite elements that start their own line; leave the rare
-            // inline element untouched.
             if prefix.contains('\n') {
-                // A trailing inline comment lives in this element's prefix
-                // because the array comma renders between the previous element
-                // and this decor. Keep it on the first line (issue #75) so it
-                // stays attached to the previous element rather than being
-                // hoisted onto its own line as a false leading comment. Only
-                // genuine own-line comments become leading lines here.
-                let (inline, rest) = split_trailing_inline_comment(&prefix);
-                let comments = extract_comments(&rest);
-                let mut new_prefix = String::new();
-                if let Some(comment) = &inline {
-                    new_prefix.push(' ');
-                    new_prefix.push_str(comment);
-                }
-                new_prefix.push('\n');
-                for comment in &comments {
-                    push_comment(&mut new_prefix, comment, &inner_indent);
-                }
-                new_prefix.push_str(&inner_indent);
-                elem.decor_mut().set_prefix(new_prefix);
+                let target = if i + 1 == len && !closes_on_own_line {
+                    &base_indent
+                } else {
+                    &bumped_indent
+                };
+                elem.decor_mut().set_prefix(reindented_multiline_decor(
+                    &prefix,
+                    target,
+                    preserve_blanks,
+                ));
             }
             // A whitespace-only suffix can carry stray blank lines before the
             // next comma; drop it. Suffixes holding comments are preserved.
+            // The last element's suffix is handled separately below (it may
+            // be the closing bracket's own indentation, not stray blanks).
+            if i + 1 == len {
+                continue;
+            }
             let suffix = elem
                 .decor()
                 .suffix()
@@ -1114,24 +1218,18 @@ fn normalize_array_blank_lines(arr: &mut Array, depth: usize) {
         }
     }
 
-    // The last element's trailing comment lives in the array's trailing decor
-    // (it renders after that element's comma). Keep it on the first line so it
-    // stays attached to the last element instead of drifting onto its own line
-    // above the closing `]` (issue #75).
-    let trailing = arr.trailing().to_string();
-    let (inline, rest) = split_trailing_inline_comment(&trailing);
-    let comments = extract_comments(&rest);
-    let mut new_trailing = String::new();
-    if let Some(comment) = &inline {
-        new_trailing.push(' ');
-        new_trailing.push_str(comment);
+    if last_suffix.contains('\n') {
+        list_set_last_suffix(
+            list,
+            reindented_multiline_decor(&last_suffix, &base_indent, preserve_blanks),
+        );
+    } else if trailing.contains('\n') {
+        list.list_set_trailing(reindented_multiline_decor(
+            &trailing,
+            &base_indent,
+            preserve_blanks,
+        ));
     }
-    new_trailing.push('\n');
-    for comment in &comments {
-        push_comment(&mut new_trailing, comment, &inner_indent);
-    }
-    new_trailing.push_str(&closing_indent);
-    arr.set_trailing(new_trailing);
 }
 
 /// Recursively format an expression in-place. Sorts object keys and recurses
@@ -1179,15 +1277,27 @@ fn format_expression(expr: &mut Expression, depth: usize, style: FormatStyle, pr
                     }
                 }
                 arr.set_trailing_comma(true);
-                normalize_array_blank_lines(arr, depth);
             }
+            // Re-indentation of own-line elements/comments and the closing
+            // `]` applies under both styles — `terraform fmt` / `tofu fmt`
+            // re-indent arrays too, they just don't insert trailing commas or
+            // collapse the author's blank lines (PAR-3).
+            if is_multiline_array(arr) {
+                reindent_bracketed(arr, depth, !style.is_opinionated());
+            }
+            let closes_on_own_line = list_closes_on_own_line(arr);
+            let last_idx = arr.len().wrapping_sub(1);
             for i in 0..arr.len() {
                 if let Some(elem) = arr.get_mut(i) {
                     let elem_inline = elem
                         .decor()
                         .prefix()
                         .is_none_or(|p| !p.to_string().contains('\n'));
-                    let elem_depth = if elem_inline { depth } else { depth + 1 };
+                    let elem_depth = if elem_inline || (i == last_idx && !closes_on_own_line) {
+                        depth
+                    } else {
+                        depth + 1
+                    };
                     format_expression(elem, elem_depth, style, 0);
                 }
             }

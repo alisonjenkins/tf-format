@@ -317,3 +317,12 @@ fn fixture_object_brace_line_entry() {
     // fixed single space, growing by two spaces on every format pass.
     run_minimal_fixture("object_brace_line_entry");
 }
+
+#[test]
+fn fixture_array_reindent() {
+    // PAR-3: minimal mode never re-indented array interiors — every
+    // element/comment kept its source indentation (including tabs), and an
+    // element sharing the opening `[`'s line stayed unmoved. Must match
+    // `tofu fmt` byte-for-byte.
+    run_minimal_fixture("array_reindent");
+}
