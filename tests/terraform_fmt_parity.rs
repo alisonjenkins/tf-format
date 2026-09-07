@@ -640,6 +640,34 @@ fn parity_object_brace_line_entry() {
     check_parity_minimal("object_brace_line_entry", input);
 }
 
+#[test]
+fn parity_blank_after_comment() {
+    // PAR-10: `tofu fmt` reproduces every blank line the author wrote,
+    // including a blank line that sits AFTER an own-line comment block
+    // (not just a leading run before it) and leading blanks at file start.
+    // A regression here specifically reintroduced a blank *before* the
+    // comment block instead of preserving the real one after it, because
+    // the group-split heuristic (`split_body_groups`) can only detect that
+    // a blank exists somewhere in a structure's prefix, not where.
+    let input = r#"# lead
+
+
+resource "a" "b" {
+  image_id = var.ami_id
+  # comment one
+  # comment two
+
+  dynamic "x" {
+    for_each = []
+    content {
+      y = 1
+    }
+  }
+}
+"#;
+    check_parity_minimal("blank_after_comment", input);
+}
+
 /// Sweep every minimal-mode fixture's `input.tf` through real `tofu fmt`
 /// so the minimal style is validated against the actual formatter, not only
 /// against hand-written `expected.tf` files. Catches any minimal-mode
