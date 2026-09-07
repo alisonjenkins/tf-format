@@ -510,6 +510,35 @@ fn render_suffix_segments(
     result
 }
 
+/// Parse a decor prefix that precedes a structural line break already emitted
+/// elsewhere (the Body/Block encoder's automatic `\n` between structures, or
+/// the mandatory `\n` that pushes an element/argument onto its own line) into
+/// `(blank_lines_before, comment)` segments plus a trailing blank-line count.
+///
+/// Mirrors [`parse_closing_suffix`]: the final element of `text.split('\n')`
+/// is always the (possibly mis-indented) whitespace run immediately before
+/// the next real content, carrying no line-break information of its own —
+/// the caller supplies the target indent separately — so it is dropped.
+fn parse_prefix_segments(text: &str) -> (Vec<(usize, String)>, usize) {
+    let text = text.replace('\r', "");
+    let mut lines: Vec<&str> = text.split('\n').collect();
+    lines.pop();
+    parse_suffix_lines(lines)
+}
+
+/// Remove one newline from the leading position of a parsed segment list —
+/// used when a manually re-emitted structural line break (one this formatter
+/// adds itself, rather than one the encoder supplies automatically) is baked
+/// into the raw leading newline count and must not be counted as an authored
+/// blank line.
+fn drop_structural_leading_newline(segments: &mut [(usize, String)], trailing: &mut usize) {
+    if let Some(first) = segments.first_mut() {
+        first.0 = first.0.saturating_sub(1);
+    } else {
+        *trailing = trailing.saturating_sub(1);
+    }
+}
+
 /// Build a prefix for a body structure. The Body/Block encoding adds `\n`
 /// between structures, so the prefix only needs indent (and optionally an
 /// extra `\n` for a blank line separator).
@@ -556,61 +585,54 @@ fn build_object_key_prefix(
     prefix
 }
 
-/// Split a first-entry prefix into (inline comment hugging `{`, blank lines
-/// following that comment, remaining comments). `tofu fmt` keeps a comment
-/// written on the same line as the object opening brace inline; any comments
-/// on their own lines below it move to their own lines as usual. Only the
+/// Minimal-style counterpart to [`build_object_key_prefix`]: reproduce the
+/// author's exact blank-line layout around any comments (blanks before,
+/// between, and after them), instead of a single leading count applied only
+/// before the first comment. `add_structural_newline` and `inline_comment`
+/// carry the same meaning as in [`build_object_key_prefix`].
+fn build_object_key_prefix_minimal(
+    add_structural_newline: bool,
+    inline_comment: Option<&str>,
+    segments: &[(usize, String)],
+    trailing_blank: usize,
+    indent: &str,
+) -> String {
+    let mut prefix = String::new();
+    if let Some(comment) = inline_comment {
+        prefix.push(' ');
+        prefix.push_str(comment);
+        prefix.push('\n');
+    } else if add_structural_newline {
+        prefix.push('\n');
+    }
+    prefix.push_str(&render_suffix_segments(
+        segments,
+        trailing_blank,
+        indent,
+        indent,
+    ));
+    prefix
+}
+
+/// Split a first-entry prefix into (inline comment hugging `{`, the text
+/// after that comment's own line break). `tofu fmt` keeps a comment written
+/// on the same line as the object opening brace inline; any comments on
+/// their own lines below it move to their own lines as usual. Only the
 /// leading single-line comment qualifies as inline.
 ///
-/// The blank-line count is recovered from the text after the comment's own
-/// line break: the raw prefix starts with the comment text, so the caller's
-/// leading-newline count sees zero and would otherwise drop an author blank
-/// between `{ # note` and the first entry.
-fn split_leading_inline_comment(prefix: &str) -> (Option<String>, usize, Vec<String>) {
+/// When there is no inline comment, `rest` is the whole prefix unchanged —
+/// callers recover blank-line/comment layout from `rest` uniformly either
+/// way.
+fn split_leading_inline_comment(prefix: &str) -> (Option<String>, String) {
     let first_line = prefix.lines().next().unwrap_or("").trim();
     let is_inline = first_line.starts_with('#')
         || first_line.starts_with("//")
         || (first_line.starts_with("/*") && first_line.ends_with("*/"));
     if !is_inline {
-        return (None, 0, extract_comments(prefix));
+        return (None, prefix.to_string());
     }
     let rest = prefix.split_once('\n').map(|(_, r)| r).unwrap_or("");
-    (
-        Some(first_line.to_string()),
-        count_leading_newlines(rest),
-        extract_comments(rest),
-    )
-}
-
-/// Number of blank lines to emit before an object entry.
-///
-/// Opinionated mode follows the group-driven `want_blank` decision (0 or 1).
-/// Minimal mode mirrors `tofu fmt`: reproduce the *exact* number of blank lines
-/// the user wrote, recovered from the entry's original prefix. `add_structural`
-/// indicates whether the prefix builder will emit the structural newline (the
-/// `\n` after `{`, or the line-break following a comma-terminated entry) — that
-/// newline is not itself a blank line, so it is excluded from the count.
-fn object_entry_blank_lines(
-    style: FormatStyle,
-    key: &ObjectKey,
-    add_structural: bool,
-    want_blank: bool,
-) -> usize {
-    if style.is_opinionated() {
-        return want_blank as usize;
-    }
-    let prefix = key
-        .decor()
-        .prefix()
-        .map(|p| p.to_string())
-        .unwrap_or_default();
-    let leading = count_leading_newlines(&prefix);
-    let blanks = if add_structural {
-        leading.saturating_sub(1)
-    } else {
-        leading
-    };
-    if blanks == 0 && want_blank { 1 } else { blanks }
+    (Some(first_line.to_string()), rest.to_string())
 }
 
 /// Adjust the prefix decoration on a body structure, emitting `blank_lines`
@@ -633,6 +655,25 @@ fn adjust_structure_prefix(
 
     let comments = extract_comments(&existing_prefix);
     let new_prefix = build_body_prefix(blank_lines, &comments, indent);
+    decor.set_prefix(new_prefix);
+}
+
+/// Minimal-style counterpart to [`adjust_structure_prefix`]: reproduce the
+/// author's exact blank-line layout (blanks before, between, and after
+/// comments) rather than collapsing to a single leading count. Unlike the
+/// opinionated path, this never needs to force a group-boundary blank: the
+/// segment parse already recovers the blank line wherever the author put it
+/// — even after a comment block trailing this structure's own prefix — so
+/// there is nothing left to "restore".
+fn adjust_structure_prefix_minimal(structure: &mut Structure, indent: &str, oneline: bool) {
+    let decor = structure.decor_mut();
+    if oneline {
+        decor.set_prefix(" ");
+        return;
+    }
+    let existing_prefix = decor.prefix().map(|p| p.to_string()).unwrap_or_default();
+    let (segments, trailing) = parse_prefix_segments(&existing_prefix);
+    let new_prefix = render_suffix_segments(&segments, trailing, indent, indent);
     decor.set_prefix(new_prefix);
 }
 
@@ -757,14 +798,7 @@ fn format_structure_group(
     oneline: bool,
 ) -> bool {
     if !style.is_opinionated() {
-        return format_structure_group_minimal(
-            body,
-            group,
-            indent,
-            want_group_blank,
-            any_emitted_before,
-            oneline,
-        );
+        return format_structure_group_minimal(body, group, indent, any_emitted_before, oneline);
     }
 
     let mut priority_single: Vec<Structure> = Vec::new();
@@ -847,30 +881,19 @@ fn format_structure_group_minimal(
     body: &mut Body,
     mut group: Vec<Structure>,
     indent: &str,
-    want_group_blank: bool,
     any_emitted_before: bool,
     oneline: bool,
 ) -> bool {
     align_body_attributes_in_place(&mut group);
 
     let mut any_emitted = any_emitted_before;
-    for (i, mut s) in group.into_iter().enumerate() {
-        // Minimal mode mirrors `tofu fmt`: preserve the exact number of blank
-        // lines the user wrote. A body structure encodes each blank line as a
-        // leading `\n` in its prefix (the Body adds the line-break between
-        // structures itself). `want_group_blank` carries the blank that caused
-        // this group to split off from the previous one, but only for the very
-        // first body group boundary where the count would otherwise be lost.
-        let existing_prefix = s
-            .decor()
-            .prefix()
-            .map(|p| p.to_string())
-            .unwrap_or_default();
-        let mut blank_lines = count_leading_newlines(&existing_prefix);
-        if i == 0 && want_group_blank && blank_lines == 0 {
-            blank_lines = 1;
-        }
-        adjust_structure_prefix(&mut s, blank_lines, indent, oneline);
+    for mut s in group {
+        // Minimal mode mirrors `tofu fmt`: preserve the author's exact
+        // blank-line layout, including blanks between and after own-line
+        // comments. The segment parse recovers the group-boundary blank
+        // wherever the author wrote it — even after a comment block in this
+        // structure's own prefix — so no group-level bump is needed.
+        adjust_structure_prefix_minimal(&mut s, indent, oneline);
         body.push(s);
         any_emitted = true;
     }
@@ -1078,25 +1101,27 @@ fn split_body_groups(structures: Vec<Structure>) -> Vec<Vec<Structure>> {
 /// to the single newline that starts the next line.
 fn reindented_multiline_decor(raw: &str, indent: &str, preserve_blanks: bool) -> String {
     let (inline, rest) = split_trailing_inline_comment(raw);
-    let comments = extract_comments(&rest);
-    let blanks = if preserve_blanks {
-        count_leading_newlines(&rest).saturating_sub(1)
-    } else {
-        0
-    };
     let mut new_decor = String::new();
     if let Some(comment) = &inline {
         new_decor.push(' ');
         new_decor.push_str(comment);
     }
-    for _ in 0..blanks {
+    if preserve_blanks {
+        // Reproduce the author's exact blank-line layout, including blanks
+        // between and after own-line comments — not just the leading run
+        // before the first one.
+        let (mut segments, mut trailing) = parse_prefix_segments(&rest);
+        drop_structural_leading_newline(&mut segments, &mut trailing);
         new_decor.push('\n');
+        new_decor.push_str(&render_suffix_segments(&segments, trailing, indent, indent));
+    } else {
+        let comments = extract_comments(&rest);
+        new_decor.push('\n');
+        for comment in &comments {
+            push_comment(&mut new_decor, comment, indent);
+        }
+        new_decor.push_str(indent);
     }
-    new_decor.push('\n');
-    for comment in &comments {
-        push_comment(&mut new_decor, comment, indent);
-    }
-    new_decor.push_str(indent);
     new_decor
 }
 
@@ -2111,17 +2136,17 @@ fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
             // being dropped by the same-line collapse or relocated to its own
             // line. (Issue #53.)
             let prev_was_comma = !is_first && !prev_was_newline;
-            let (inline_comment, inline_blanks, comments) =
-                if (is_first && !style.is_opinionated()) || prev_was_comma {
-                    let raw = key
-                        .decor()
-                        .prefix()
-                        .map(|p| p.to_string())
-                        .unwrap_or_default();
-                    split_leading_inline_comment(&raw)
-                } else {
-                    (None, 0, extract_key_comments(&key))
-                };
+            let raw = key
+                .decor()
+                .prefix()
+                .map(|p| p.to_string())
+                .unwrap_or_default();
+            let (inline_comment, rest) = if (is_first && !style.is_opinionated()) || prev_was_comma
+            {
+                split_leading_inline_comment(&raw)
+            } else {
+                (None, raw)
+            };
             // Minimal: an entry the author kept on the previous entry's line
             // (comma terminator, no newline before it) gets a single space
             // after the comma — but only when there is no inline comment to
@@ -2130,28 +2155,41 @@ fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
                 && !had_source_newline
                 && inline_comment.is_none()
                 && (is_first || !prev_was_newline);
-            let blank_lines = object_entry_blank_lines(
-                style,
-                &key,
-                add_structural,
-                need_group_blank && !group_blank_emitted,
-            );
-            // With an inline comment the raw prefix starts with the comment
-            // text, so the blank count above came back 0; use the count
-            // recovered from after the comment line.
-            let blank_lines = if inline_comment.is_some() {
-                inline_blanks
-            } else {
-                blank_lines
-            };
+            let want_blank = need_group_blank && !group_blank_emitted;
             let prefix = if same_line {
                 String::from(" ")
-            } else {
+            } else if style.is_opinionated() {
+                let comments = extract_comments(&rest);
+                // With an inline comment the raw prefix starts with the comment
+                // text, so the group-driven blank count doesn't apply; use the
+                // count recovered from after the comment line instead.
+                let blank_lines = if inline_comment.is_some() {
+                    count_leading_newlines(&rest)
+                } else {
+                    want_blank as usize
+                };
                 build_object_key_prefix(
                     add_structural,
                     blank_lines,
                     inline_comment.as_deref(),
                     &comments,
+                    entry_indent,
+                )
+            } else {
+                // The segment parse already recovers the group-boundary blank
+                // wherever the author wrote it — even after a comment block
+                // in this entry's own prefix — so `want_blank` needs no
+                // separate handling here (unlike the opinionated branch,
+                // which ignores author blanks entirely).
+                let (mut segments, mut trailing) = parse_prefix_segments(&rest);
+                if add_structural && inline_comment.is_none() {
+                    drop_structural_leading_newline(&mut segments, &mut trailing);
+                }
+                build_object_key_prefix_minimal(
+                    add_structural,
+                    inline_comment.as_deref(),
+                    &segments,
+                    trailing,
                     entry_indent,
                 )
             };
@@ -2173,35 +2211,49 @@ fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
         }
         for (i, (mut key, mut value)) in multi.into_iter().enumerate() {
             let want_blank = (i > 0 || has_single) || (need_group_blank && !group_blank_emitted);
-            let blank_lines = object_entry_blank_lines(style, &key, is_first, want_blank);
             // As in the single-line loop: a comment on the first line of the
             // prefix is an inline trailing comment of the previous (comma-
             // terminated) entry, or the first entry's `{`-hugging comment. (#53.)
             let prev_was_comma =
                 !is_first && !matches!(last_terminator, ObjectValueTerminator::Newline);
-            let (inline_comment, inline_blanks, comments) =
-                if (is_first && !style.is_opinionated()) || prev_was_comma {
-                    let raw = key
-                        .decor()
-                        .prefix()
-                        .map(|p| p.to_string())
-                        .unwrap_or_default();
-                    split_leading_inline_comment(&raw)
-                } else {
-                    (None, 0, extract_key_comments(&key))
-                };
-            let blank_lines = if inline_comment.is_some() {
-                inline_blanks
+            let raw = key
+                .decor()
+                .prefix()
+                .map(|p| p.to_string())
+                .unwrap_or_default();
+            let (inline_comment, rest) = if (is_first && !style.is_opinionated()) || prev_was_comma
+            {
+                split_leading_inline_comment(&raw)
             } else {
-                blank_lines
+                (None, raw)
             };
-            let prefix = build_object_key_prefix(
-                is_first,
-                blank_lines,
-                inline_comment.as_deref(),
-                &comments,
-                &indent,
-            );
+            let prefix = if style.is_opinionated() {
+                let comments = extract_comments(&rest);
+                let blank_lines = if inline_comment.is_some() {
+                    count_leading_newlines(&rest)
+                } else {
+                    want_blank as usize
+                };
+                build_object_key_prefix(
+                    is_first,
+                    blank_lines,
+                    inline_comment.as_deref(),
+                    &comments,
+                    &indent,
+                )
+            } else {
+                let (mut segments, mut trailing) = parse_prefix_segments(&rest);
+                if is_first && inline_comment.is_none() {
+                    drop_structural_leading_newline(&mut segments, &mut trailing);
+                }
+                build_object_key_prefix_minimal(
+                    is_first,
+                    inline_comment.as_deref(),
+                    &segments,
+                    trailing,
+                    &indent,
+                )
+            };
             key.decor_mut().set_prefix(prefix);
             normalize_terminator(&mut value, style, use_commas);
             last_terminator = value.terminator();
@@ -2551,48 +2603,62 @@ pub fn sort_top_level(body: &mut Body, style: FormatStyle) {
                 for mut s in group {
                     if !any_emitted {
                         // First top-level structure: no preceding block, so no
-                        // blank-line separator — but the file's leading comments
-                        // live in THIS structure's prefix. Preserve them instead
-                        // of blindly clearing (was data loss). `tofu fmt` keeps a
-                        // single blank line between header comments and the first
-                        // block, so re-emit one if the source had any.
+                        // auto-emitted line break precedes it — the file's
+                        // leading comments (and, under minimal style, any
+                        // genuine leading blank lines at file start) live in
+                        // THIS structure's prefix verbatim. Preserve them
+                        // instead of blindly clearing (was data loss).
                         let existing = s
                             .decor()
                             .prefix()
                             .map(|p| p.to_string())
                             .unwrap_or_default();
-                        let comments = extract_comments(&existing);
-                        if comments.is_empty() {
-                            s.decor_mut().set_prefix("");
+                        if style.is_opinionated() {
+                            // `tofu fmt` keeps a single blank line between
+                            // header comments and the first block; opinionated
+                            // mode drops any leading file blanks and collapses
+                            // interior/trailing spacing to that one line.
+                            let comments = extract_comments(&existing);
+                            if comments.is_empty() {
+                                s.decor_mut().set_prefix("");
+                            } else {
+                                let mut prefix = String::new();
+                                for comment in &comments {
+                                    push_comment(&mut prefix, comment, "");
+                                }
+                                if blank_after_comments(&existing) {
+                                    prefix.push('\n');
+                                }
+                                s.decor_mut().set_prefix(prefix);
+                            }
                         } else {
-                            let mut prefix = String::new();
-                            for comment in &comments {
-                                push_comment(&mut prefix, comment, "");
-                            }
-                            if blank_after_comments(&existing) {
-                                prefix.push('\n');
-                            }
-                            s.decor_mut().set_prefix(prefix);
+                            // Minimal: reproduce every blank line verbatim,
+                            // including leading file blanks and any blanks
+                            // between/after header comments.
+                            let (segments, trailing) = parse_prefix_segments(&existing);
+                            s.decor_mut()
+                                .set_prefix(render_suffix_segments(&segments, trailing, "", ""));
                         }
                     } else {
                         // Preserve comments; set the blank-line separator.
                         // Opinionated normalizes spacing between top-level blocks
                         // to one blank line. Minimal mirrors `tofu fmt`: keep the
-                        // author's exact blank-line count (which may be zero for
+                        // author's exact blank-line layout (which may be zero for
                         // adjacent blocks) — forcing a blank here breaks parity.
                         let existing = s
                             .decor()
                             .prefix()
                             .map(|p| p.to_string())
                             .unwrap_or_default();
-                        let comments = extract_comments(&existing);
-                        let blank_lines = if style.is_opinionated() {
-                            1
+                        if style.is_opinionated() {
+                            let comments = extract_comments(&existing);
+                            s.decor_mut()
+                                .set_prefix(build_body_prefix(1, &comments, ""));
                         } else {
-                            count_leading_newlines(&existing)
-                        };
-                        s.decor_mut()
-                            .set_prefix(build_body_prefix(blank_lines, &comments, ""));
+                            let (segments, trailing) = parse_prefix_segments(&existing);
+                            s.decor_mut()
+                                .set_prefix(render_suffix_segments(&segments, trailing, "", ""));
+                        }
                     }
                     body.push(s);
                     any_emitted = true;

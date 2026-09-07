@@ -158,6 +158,17 @@ fn fixture_preserve_blank_lines() {
 }
 
 #[test]
+fn fixture_blank_after_comment() {
+    // `tofu fmt` reproduces every blank line the author wrote, including
+    // ones between/after own-line comments and leading blanks at file
+    // start — not just the leading run before the first comment. Covers
+    // body attributes, nested blocks, top-level blocks, object entries,
+    // and array elements. expected.tf is byte-identical to `tofu fmt`
+    // output. (PAR-10)
+    run_minimal_fixture("blank_after_comment");
+}
+
+#[test]
 fn fixture_heredoc_indent_marker_preserved() {
     // `tofu fmt` keeps the literal `<<-` marker even when a body line
     // has zero indent (nothing to dedent); hcl-edit otherwise drops it.
