@@ -305,3 +305,15 @@ fn fixture_template_spacing() {
     // expression down to exactly one.
     run_minimal_fixture("template_spacing");
 }
+
+#[test]
+fn fixture_object_brace_line_entry() {
+    // `tofu fmt` parity: an object's first entry sitting on the `{` line
+    // stays there (space after `{`, no reflow to its own line), and its
+    // last entry sitting on the `}` line keeps `}` right after it with a
+    // single space, indented one level shallower than a standalone entry.
+    // Neither boundary entry joins the `=`-alignment run. Regression: the
+    // closing gap used to be built from a full indent string instead of a
+    // fixed single space, growing by two spaces on every format pass.
+    run_minimal_fixture("object_brace_line_entry");
+}

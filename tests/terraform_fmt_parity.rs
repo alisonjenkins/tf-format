@@ -622,6 +622,24 @@ fn parity_closing_brace_reindent() {
     check_parity_minimal("closing_brace_reindent", input);
 }
 
+#[test]
+fn parity_object_brace_line_entry() {
+    // `tofu fmt` keeps an object's first entry inline with `{` (just a space
+    // after it, no reflow) and its last entry inline with `}` (a single
+    // space, `}` joining that line) when the source wrote them that way,
+    // indenting the shared-`}` entry one level shallower than a standalone
+    // entry and excluding both boundary entries from `=` alignment.
+    // Regression: the gap before `}` used to be built from a full indent
+    // string rather than a fixed single space, growing by two spaces on
+    // every format pass.
+    let input = r#"locals {
+  b = {a = 1,
+  bb = 2}
+}
+"#;
+    check_parity_minimal("object_brace_line_entry", input);
+}
+
 /// Sweep every minimal-mode fixture's `input.tf` through real `tofu fmt`
 /// so the minimal style is validated against the actual formatter, not only
 /// against hand-written `expected.tf` files. Catches any minimal-mode

@@ -416,3 +416,12 @@ fn fixture_template_spacing() {
     // expression down to exactly one.
     run_fixture("template_spacing");
 }
+
+#[test]
+fn fixture_object_brace_line_entry() {
+    // An object whose first entry sits on the `{` line is a multi-line
+    // object (it has an entry on another line), so opinionated style
+    // explodes it one-entry-per-line and aligns `=` — same as any other
+    // multi-line object.
+    run_fixture("object_brace_line_entry");
+}
