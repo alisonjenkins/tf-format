@@ -55,6 +55,14 @@ fn fixture_nested_blocks() {
 }
 
 #[test]
+fn fixture_closing_brace_reindent() {
+    // PAR-1: a mis-indented / tab-indented `}` and an own-line comment sitting
+    // before it must be re-indented to the block's depth (depth+1 for the
+    // comment), not restored verbatim.
+    run_fixture("closing_brace_reindent");
+}
+
+#[test]
 fn fixture_comments_preserved() {
     run_fixture("comments_preserved");
 }
