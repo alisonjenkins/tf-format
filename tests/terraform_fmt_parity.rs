@@ -683,3 +683,27 @@ fn parity_all_minimal_fixtures() {
         check_parity_minimal(&name, &input);
     }
 }
+
+#[test]
+fn parity_array_reindent() {
+    // PAR-3: minimal mode must re-indent a misindented multi-line array
+    // (tabs, an own-line comment, and an element sharing the `[` line)
+    // exactly like `tofu fmt`.
+    let input = r#"locals {
+  a = [
+        1,
+    2,
+      3
+    ]
+  c = [
+    "x", # one
+      # own-line comment
+    "z",
+  ]
+  d = [1,
+      2,
+    3]
+}
+"#;
+    check_parity_minimal("array_reindent", input);
+}

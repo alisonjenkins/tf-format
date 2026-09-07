@@ -425,3 +425,13 @@ fn fixture_object_brace_line_entry() {
     // multi-line object.
     run_fixture("object_brace_line_entry");
 }
+
+#[test]
+fn fixture_array_reindent() {
+    // PAR-3: a misindented multi-line array — including tabs, an own-line
+    // comment, and an element sharing the opening `[`'s line — is
+    // re-indented to the canonical depth/depth+1 columns even under the
+    // opinionated style (which additionally sorts/hoists and adds the
+    // trailing comma).
+    run_fixture("array_reindent");
+}
