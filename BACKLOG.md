@@ -84,6 +84,7 @@ these were caught: re-indentation of mangled input is never exercised.
 | PAR-7 interior expression spacing (`a=1+2`, `f( 1 ,2 )`) | known gap, open |
 | PAR-8 net-zero bracket lines (`}, {`, `], [`, `[for … : {`) mis-indented; per-node heuristics vs tofu bracket stack | fixed |
 | PAR-9 multi-line `"${f({…})}"` interpolation: tofu unwraps to `(f({…}))` | open, low |
+| PAR-10 minimal mode drops blank lines that follow an own-line comment (and leading file blanks) | open |
 
 ### PAR-1 — Block closing `}` never re-indented (both modes)
 `src/formatter.rs` `format_body` clones the body decor and restores it verbatim;
@@ -187,6 +188,31 @@ Then delete the per-node indent heuristics it supersedes.
 ### PAR-9 — Multi-line interpolation-only string is parenthesised by tofu
 `b = "${f({\n  k = 1\n})}"` → tofu emits `b = (f({\n  k = 1\n}))`; tf-format's
 `try_unwrap_single_interpolation` emits `b = f({…})` without the parens. Rare; low priority.
+
+### PAR-10 — Minimal mode drops blank lines after own-line comments and at file start
+Found by running `scripts/parity-check.sh` over terraform-aws-modules/vpc, eks and cloudposse
+eks-cluster with the PAR-1..8 build: 156 of 156 files mismatched, every diff a deleted blank
+line. Pre-existing on `main` (bisected), not a regression. `tofu fmt` reproduces every blank
+line the author wrote; tf-format's minimal paths count only the *leading* newlines of a decor
+prefix (`count_leading_newlines`) and then re-emit the comments with no blanks between or
+after them. Affected slots: body structure prefixes (`adjust_structure_prefix` via
+`format_structure_group_minimal`), top-level blocks in `sort_top_level` (both the first-block
+branch, which also strips leading file blank lines tofu keeps, and the non-first branch),
+object key prefixes (`build_object_key_prefix` / `object_entry_blank_lines`), and array /
+func-arg / parenthesis decor (`reindented_multiline_decor`). Repro:
+```hcl
+################################################################################
+# VPC
+################################################################################
+
+output "vpc_id" {
+  value = 1
+}
+```
+tofu keeps the blank before `output`; tf-format deletes it. Same inside blocks, objects, arrays.
+→ In minimal mode rebuild each prefix from a `(blank_lines_before, comment)` segment list plus
+a trailing blank count (PAR-1's `parse_suffix_lines` already does this parse for suffixes);
+opinionated mode keeps its collapse-to-one policy.
 
 ### Test gap
 Add a "mangled" parity lane: fixtures with deliberately wrong indentation, tabs, and comment
