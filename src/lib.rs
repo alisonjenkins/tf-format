@@ -400,9 +400,9 @@ fn bracket_net(line: &str, mode_stack: &mut Vec<StrMode>, in_block_comment: &mut
 /// stack, matching `terraform fmt` / `tofu fmt` (`hclwrite`'s `formatIndent`):
 /// a line's own indent is `2 * stack.len()` *before* any push, a line whose
 /// net bracket delta ([`bracket_net`]) is positive then pushes that delta, and
-/// a line whose delta is negative pops entries — each popped entry's value
-/// subtracted from the amount still to consume — until consumed or the stack
-/// is empty, before computing that line's indent from the resulting depth.
+/// a line whose delta is negative consumes entries from the top — an entry
+/// larger than what is left to close is only *reduced*, not popped — before
+/// computing that line's indent from the resulting depth.
 /// This one mechanism replaces the AST-level per-node re-indentation
 /// (`reindent_bracketed`, `reindent_parenthesis`, etc.): those approximated
 /// `hclwrite`'s bracket stack node by node and got every net-zero line
@@ -444,9 +444,11 @@ fn apply_bracket_stack_indent(lines: Vec<(String, bool)>) -> Vec<(String, bool)>
 /// Apply one line's bracket net delta to the indent-depth stack and return
 /// the depth to indent *that* line at (measured before any push, per
 /// `hclwrite`'s `formatIndent`): a positive net pushes itself after; a
-/// negative net pops entries — each popped entry's own value subtracted from
-/// the amount still to consume — until consumed or the stack is empty,
-/// first; a zero net leaves the stack alone.
+/// negative net first consumes the stack from the top — an entry smaller
+/// than or equal to what is left to close is popped, a larger one is only
+/// reduced by that amount and stays (so `}, { … })` closing two of a
+/// three-opener line keeps the interior depth); a zero net leaves the stack
+/// alone.
 fn update_stack(stack: &mut Vec<i32>, net: i32) -> usize {
     match net.cmp(&0) {
         std::cmp::Ordering::Greater => {
@@ -457,9 +459,15 @@ fn update_stack(stack: &mut Vec<i32>, net: i32) -> usize {
         std::cmp::Ordering::Less => {
             let mut remaining = -net;
             while remaining > 0 {
-                match stack.pop() {
-                    Some(popped) => remaining -= popped,
-                    None => break,
+                let Some(top) = stack.last_mut() else {
+                    break;
+                };
+                if *top > remaining {
+                    *top -= remaining;
+                    remaining = 0;
+                } else {
+                    remaining -= *top;
+                    stack.pop();
                 }
             }
             stack.len()
