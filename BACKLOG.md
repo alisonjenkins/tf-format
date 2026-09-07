@@ -76,7 +76,7 @@ these were caught: re-indentation of mangled input is never exercised.
 | Item | Status |
 |------|--------|
 | PAR-1 block closing `}` never re-indented | open |
-| PAR-2 trailing-comment alignment runs too narrow | open |
+| PAR-2 trailing-comment alignment runs too narrow | fixed |
 | PAR-3 minimal mode never re-indents array interiors | open |
 | PAR-4 func-call / conditional / paren / for-expr lines never re-indented | open |
 | PAR-5 template directive and interpolation spacing not normalised | open |
