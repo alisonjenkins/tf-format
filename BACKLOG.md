@@ -82,6 +82,8 @@ these were caught: re-indentation of mangled input is never exercised.
 | PAR-5 template directive and interpolation spacing not normalised | fixed |
 | PAR-6 object opened with first entry on the brace line: exploded + non-idempotent | fixed |
 | PAR-7 interior expression spacing (`a=1+2`, `f( 1 ,2 )`) | known gap, open |
+| PAR-8 net-zero bracket lines (`}, {`, `], [`, `[for … : {`) mis-indented; per-node heuristics vs tofu bracket stack | open |
+| PAR-9 multi-line `"${f({…})}"` interpolation: tofu unwraps to `(f({…}))` | open, low |
 
 ### PAR-1 — Block closing `}` never re-indented (both modes)
 `src/formatter.rs` `format_body` clones the body decor and restores it verbatim;
@@ -153,6 +155,38 @@ closing trailing a fixed single space when the last entry has no newline before 
 `a=1+2`, `[1,2 ,3]`, `f( 1 ,2 )`, `b?c:d`, `x .y. z`, `( b )` are left as written in
 minimal mode; tofu normalises all of them. Large surface (every `Expression` variant's
 inner decor); tracked, not scheduled.
+
+### PAR-8 — Net-zero bracket lines mis-indented; indentation should be a line pass
+Found while reviewing PAR-3/4. `tofu fmt` (hclwrite `formatIndent`) indents by a per-line
+bracket stack: each line's indent is `2 * stack_depth` at the start of the line; a line with
+net positive bracket delta pushes, net negative pops *before* indenting the line, net zero
+leaves the stack alone. So `}, {` between two objects in a list, `], [` between two arrays in
+call args, and `[for x in l : {` all sit at the *interior* depth, `] }` pops twice, comment-only
+lines follow the stack too, and heredoc bodies (opener through closing marker) are skipped.
+tf-format's per-node re-indent (PAR-3/4, `reindent_bracketed`, `reindent_parenthesis`, the
+Conditional `bump_trailing_indent` special case, PAR-1's suffix rebuild) approximates this
+node by node and gets every net-zero line wrong. Repro:
+```hcl
+locals {
+  a = [{
+    x = 1
+  }, {
+    y = 2
+  }]
+  e = [for x in var.l : {
+    k = x
+  }]
+}
+```
+tofu keeps `}, {` at column 4 and `k = x` at column 4; tf-format emits column 2 / 6.
+→ Add a line-based indent pass in `post_process` (like PAR-2's comment pass) that tokenises
+brackets outside strings and comments (brackets inside `${ }` / `%{ }` count, literal string
+text does not), tracks heredoc spans, and rewrites leading whitespace per the stack rule.
+Then delete the per-node indent heuristics it supersedes.
+
+### PAR-9 — Multi-line interpolation-only string is parenthesised by tofu
+`b = "${f({\n  k = 1\n})}"` → tofu emits `b = (f({\n  k = 1\n}))`; tf-format's
+`try_unwrap_single_interpolation` emits `b = f({…})` without the parens. Rare; low priority.
 
 ### Test gap
 Add a "mangled" parity lane: fixtures with deliberately wrong indentation, tabs, and comment
