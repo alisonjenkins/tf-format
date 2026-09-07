@@ -79,7 +79,7 @@ these were caught: re-indentation of mangled input is never exercised.
 | PAR-2 trailing-comment alignment runs too narrow | fixed |
 | PAR-3 minimal mode never re-indents array interiors | open |
 | PAR-4 func-call / conditional / paren / for-expr lines never re-indented | open |
-| PAR-5 template directive and interpolation spacing not normalised | open |
+| PAR-5 template directive and interpolation spacing not normalised | fixed |
 | PAR-6 object opened with first entry on the brace line: exploded + non-idempotent | open |
 | PAR-7 interior expression spacing (`a=1+2`, `f( 1 ,2 )`) | known gap, open |
 
@@ -131,8 +131,15 @@ continuation-line prefixes and closing `)` are left as written. Repro:
 tofu rewrites `"${ var.x }-y"` → `"${var.x}-y"`, `"%{ if x ~}a%{ endif }"` →
 `"%{if x~}a%{endif}"`, and applies the same inside heredoc bodies. tf-format leaves
 `StringTemplate` / `HeredocTemplate` verbatim.
-→ Walk template elements and clear the interpolation / directive interior decor.
-Beware: `post_process` treats heredoc bodies as opaque, so this must happen at the AST level.
+→ ✅ fixed. `format_expression` now recurses into `StringTemplate` / `HeredocTemplate`
+elements (`format_template_element` / `format_template_directive` in `src/formatter.rs`),
+clearing the interpolation/directive interior decor (and forcing the mandatory single space
+between a directive keyword and its expression) unless the gap spans multiple lines, in which
+case the source layout is left alone. `~` strip markers are untouched — they encode
+separately from the decor this touches. Pinned by the `template_spacing` fixtures (minimal +
+opinionated) and the `parity_template_directive_spacing` real-`tofu`-backed test.
+Noted but out of scope: a bare `func( "a" , "b" )` function-call argument's own interior
+spacing is a separate, pre-existing gap — tracked as PAR-7.
 
 ### PAR-6 — Object with first entry on the brace line: exploded and non-idempotent
 Input `b = {a = 1,\n  bb = 2}`: tofu → `b = { a = 1,\n  bb = 2 }`. tf-format moves `a` to
