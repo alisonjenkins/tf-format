@@ -443,3 +443,14 @@ fn fixture_expr_reindent() {
     // the canonical columns.
     run_fixture("expr_reindent");
 }
+
+#[test]
+fn fixture_bracket_stack_indent() {
+    // PAR-8: a net-zero line (`}, {`, `], [`, `[for x in l : {`) sits at the
+    // interior depth instead of dedenting, and a line that closes more than
+    // it opens (`])`, `] }`) pops by however much *that one line* pushed —
+    // in one step, not once per bracket character. Same bracket-stack rule
+    // as the minimal-mode `bracket_stack_indent` fixture, under the
+    // opinionated style's blank-line-between-attributes formatting.
+    run_fixture("bracket_stack_indent");
+}

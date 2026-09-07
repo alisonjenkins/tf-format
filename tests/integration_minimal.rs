@@ -334,3 +334,13 @@ fn fixture_expr_reindent() {
     // mode. Must match `tofu fmt` byte-for-byte.
     run_minimal_fixture("expr_reindent");
 }
+
+#[test]
+fn fixture_bracket_stack_indent() {
+    // PAR-8: indentation is a per-line bracket stack, not a per-node
+    // heuristic — `}, {` / `], [` (net-zero) stay at the interior depth
+    // instead of dedenting, and `])` / `]}` (net < 0) pop by the pushed
+    // line's own count in one go, regardless of how many brackets opened on
+    // it. Must match `tofu fmt` byte-for-byte.
+    run_minimal_fixture("bracket_stack_indent");
+}

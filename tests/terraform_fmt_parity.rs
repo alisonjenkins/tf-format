@@ -748,3 +748,39 @@ fn parity_expr_reindent() {
 "#;
     check_parity_minimal("expr_reindent", input);
 }
+
+#[test]
+fn parity_bracket_stack_indent() {
+    // PAR-8: indentation is a per-line bracket stack, not a per-node
+    // heuristic — a net-zero line (`}, {`, `], [`, `[for x in l : {`) sits at
+    // the *interior* depth, and `] }` (net -2) pops twice in one go. Mixes
+    // already-canonical and misindented input, since both must land on the
+    // same bracket-stack depth regardless of the source's own indentation.
+    let input = r#"locals {
+  a = [{
+    x = 1
+  }, {
+    y = 2
+  }]
+  b = merge([
+        1,
+      ], [
+  2,
+      ])
+  c = [for x in var.l : {
+        k = x
+      }]
+  d = {
+        x = [
+      1,
+        ]
+      }
+  e = [
+    [
+  1,
+        ],
+  ]
+}
+"#;
+    check_parity_minimal("bracket_stack_indent", input);
+}
