@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.5.3](https://github.com/alisonjenkins/tf-format/compare/v0.5.2...v0.5.3) (2026-09-07)
+
+
+### Bug Fixes
+
+* **formatter:** align trailing comments across a flat line run (PAR-2) ([81e6c0f](https://github.com/alisonjenkins/tf-format/commit/81e6c0f3389726d9d9f861ba7ebd6c4a05fdad7d))
+* **formatter:** keep brace-line object entries inline in minimal mode ([2f585cc](https://github.com/alisonjenkins/tf-format/commit/2f585cc636099e1f4b0255030cff30d998d7cda8))
+* **formatter:** normalize template interpolation/directive spacing ([cd0b24f](https://github.com/alisonjenkins/tf-format/commit/cd0b24ff55041024f9166b028d3819b71c1f95e2))
+* **formatter:** preserve blank lines around own-line comments (minimal) ([c24d559](https://github.com/alisonjenkins/tf-format/commit/c24d559c2a878a8732d0f363ec272a56e6fd80c4))
+* **formatter:** re-indent a block's closing brace and trailing comments ([05172f1](https://github.com/alisonjenkins/tf-format/commit/05172f182ae02985e70e19afc3264dcfaecb0eaa))
+* **formatter:** re-indent func-call args, parens, ternaries, for-exprs (PAR-4) ([0034b54](https://github.com/alisonjenkins/tf-format/commit/0034b54ea0b01b6469d162c0c43e21b59b1e87de))
+* **formatter:** re-indent minimal-mode array interiors (PAR-3) ([43a925d](https://github.com/alisonjenkins/tf-format/commit/43a925d3759b6dc67bea0de694a0252b1d9cb764))
+* **formatter:** reduce a partially closed indent entry instead of popping it ([6664c96](https://github.com/alisonjenkins/tf-format/commit/6664c9607955d2feb22d8aee1592f4f9623daf59))
+* **formatter:** replace per-node indent with bracket-stack line pass ([d41baf2](https://github.com/alisonjenkins/tf-format/commit/d41baf2578990f0bbc0d39de72eba976534d1d1e))
+
 ## [0.5.2](https://github.com/alisonjenkins/tf-format/compare/v0.5.1...v0.5.2) (2026-07-14)
 
 
