@@ -585,6 +585,30 @@ fn parity_array_element_trailing_comment_alignment() {
     check_parity_minimal("array_element_trailing_comment_alignment", input);
 }
 
+#[test]
+fn parity_template_directive_spacing() {
+    // `tofu fmt` strips the whitespace just inside `${ … }` interpolations
+    // and `%{ … }` directives, both in plain strings and heredoc bodies, and
+    // collapses extra space around a directive keyword's expression to a
+    // single space while leaving `~` strip markers untouched.
+    let input = r#"locals {
+  a = "%{ if var.x }yes%{ else }no%{ endif }"
+  b = "y${ var.x }z"
+  c = "y%{ if   var.x   }A%{  else  }B%{   endif   }z"
+  d = "y%{~ if var.x ~}A%{~ else ~}B%{~ endif ~}z"
+  e = "y%{ for   k , v   in   var.m   ~}A%{   endfor   }z"
+  f = "${ var.x }-y"
+  g = "x-${var.y  }"
+  h = <<EOT
+%{ for x in var.l ~}
+${ x }
+%{ endfor ~}
+EOT
+}
+"#;
+    check_parity_minimal("template_directive_spacing", input);
+}
+
 /// Sweep every minimal-mode fixture's `input.tf` through real `tofu fmt`
 /// so the minimal style is validated against the actual formatter, not only
 /// against hand-written `expected.tf` files. Catches any minimal-mode

@@ -399,3 +399,12 @@ fn fixture_comment_chain_alignment() {
     // though an AST walk treats them as different structures.
     run_fixture("comment_chain_alignment");
 }
+
+#[test]
+fn fixture_template_spacing() {
+    // `tofu fmt` strips the whitespace just inside `${ … }` interpolations
+    // and `%{ … }` directives (both in plain strings and heredoc bodies),
+    // while collapsing multiple spaces around a directive keyword's
+    // expression down to exactly one.
+    run_fixture("template_spacing");
+}

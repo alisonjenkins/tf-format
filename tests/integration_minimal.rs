@@ -287,3 +287,12 @@ fn fixture_comment_chain_alignment() {
     // line, an own-line comment, or a comment-less line breaks the run.
     run_minimal_fixture("comment_chain_alignment");
 }
+
+#[test]
+fn fixture_template_spacing() {
+    // `tofu fmt` strips the whitespace just inside `${ … }` interpolations
+    // and `%{ … }` directives (both in plain strings and heredoc bodies),
+    // while collapsing multiple spaces around a directive keyword's
+    // expression down to exactly one.
+    run_minimal_fixture("template_spacing");
+}
