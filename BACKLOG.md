@@ -77,8 +77,8 @@ these were caught: re-indentation of mangled input is never exercised.
 |------|--------|
 | PAR-1 block closing `}` never re-indented | fixed |
 | PAR-2 trailing-comment alignment runs too narrow | fixed |
-| PAR-3 minimal mode never re-indents array interiors | open |
-| PAR-4 func-call / conditional / paren / for-expr lines never re-indented | open |
+| PAR-3 minimal mode never re-indents array interiors | fixed |
+| PAR-4 func-call / conditional / paren / for-expr lines never re-indented | fixed |
 | PAR-5 template directive and interpolation spacing not normalised | fixed |
 | PAR-6 object opened with first entry on the brace line: exploded + non-idempotent | fixed |
 | PAR-7 interior expression spacing (`a=1+2`, `f( 1 ,2 )`) | known gap, open |
@@ -363,3 +363,5 @@ order, asserting fixed `PRIORITY_ATTRS` order.
 3. P1 robustness batch: BUG-3, BUG-4, BUG-5, BUG-6 (+ IMP-1 alongside BUG-3).
 4. P2 CLI papercuts (BUG-7..11) + coverage (TEST-4..6).
 5. P3 cleanups.
+
+---
