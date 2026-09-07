@@ -421,3 +421,19 @@ fn object_brace_line_entry_gap_does_not_grow_on_repeat_format() {
         "gap before `}}` must not grow on a second format pass"
     );
 }
+
+#[test]
+fn escaped_template_marker_does_not_disturb_indent() {
+    // `$${` / `%%{` inside a quoted string is a literal, not an interpolation
+    // opener. The bracket-stack indent pass used to open a template scope on
+    // it and, with no closing `}` on the line, indent every later line one
+    // level too deep.
+    let opts = FormatOptions::minimal();
+    let input = "locals {\n  a = \"$${x\"\n  b = \"%%{y\"\n  c = [\n    1,\n  ]\n}\n";
+    let out =
+        format_hcl_with(input, &opts).unwrap_or_else(|e| panic!("minimal format failed: {e}"));
+    assert_eq!(
+        out, input,
+        "escaped template markers must be indent-neutral"
+    );
+}

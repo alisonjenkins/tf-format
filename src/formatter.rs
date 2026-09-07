@@ -719,15 +719,18 @@ pub fn format_body(body: &mut Body, depth: usize, parent_ident: Option<&str>, st
     // Restore body-level metadata. The closing suffix (whitespace + any
     // own-line comments between the last structure and `}`) is rebuilt
     // rather than restored verbatim, so a mis-indented or tab-indented `}`
-    // gets re-indented to the block's depth (comments to depth+1) instead of
-    // surviving untouched — see PAR-1.
+    // (and any own-line comments before it) never survives untouched — see
+    // PAR-1. Indentation itself is applied uniformly afterwards by the
+    // bracket-stack line pass in `post_process` (PAR-8), so the rebuild only
+    // needs to get blank-line counts and comment text right, not indent
+    // width.
     *body.decor_mut() = body_decor.clone();
     if !oneline_render {
         let old_suffix = body_decor
             .suffix()
             .map(|s| s.to_string())
             .unwrap_or_default();
-        let new_suffix = rebuild_closing_suffix(&old_suffix, &indent, &"  ".repeat(depth));
+        let new_suffix = rebuild_closing_suffix(&old_suffix, "", "");
         body.decor_mut().set_suffix(new_suffix);
     }
     body.set_prefer_oneline(prefer_oneline);
@@ -1097,122 +1100,60 @@ fn reindented_multiline_decor(raw: &str, indent: &str, preserve_blanks: bool) ->
     new_decor
 }
 
-/// A bracketed, comma-separated list of expressions — an [`Array`]'s elements
-/// or a [`hcl_edit::expr::FuncArgs`]'s arguments — abstracted so
-/// [`reindent_bracketed`] can re-indent either one.
-trait ElementList {
-    fn list_len(&self) -> usize;
-    fn list_get_mut(&mut self, index: usize) -> Option<&mut Expression>;
-    fn list_trailing(&self) -> String;
-    fn list_set_trailing(&mut self, trailing: String);
-}
-
-impl ElementList for Array {
-    fn list_len(&self) -> usize {
-        self.len()
-    }
-    fn list_get_mut(&mut self, index: usize) -> Option<&mut Expression> {
-        self.get_mut(index)
-    }
-    fn list_trailing(&self) -> String {
-        self.trailing().to_string()
-    }
-    fn list_set_trailing(&mut self, trailing: String) {
-        self.set_trailing(trailing);
-    }
-}
-
-impl ElementList for hcl_edit::expr::FuncArgs {
-    fn list_len(&self) -> usize {
-        self.len()
-    }
-    fn list_get_mut(&mut self, index: usize) -> Option<&mut Expression> {
-        self.get_mut(index)
-    }
-    fn list_trailing(&self) -> String {
-        self.trailing().to_string()
-    }
-    fn list_set_trailing(&mut self, trailing: String) {
-        self.set_trailing(trailing);
-    }
-}
-
-/// Whitespace text of the last element's decor suffix, or an empty string
-/// when the list is empty.
-fn list_last_suffix<T: ElementList>(list: &mut T) -> String {
-    let len = list.list_len();
-    if len == 0 {
-        return String::new();
-    }
-    list.list_get_mut(len - 1)
+/// Whether an array's closing `]` sits on its own line rather than sharing
+/// the last element's line (used to pick the right recursion depth for that
+/// element's own multi-line content).
+fn array_closes_on_own_line(arr: &mut Array) -> bool {
+    let len = arr.len();
+    let last_suffix = len
+        .checked_sub(1)
+        .and_then(|last| arr.get_mut(last))
         .and_then(|e| e.decor().suffix().map(|s| s.to_string()))
-        .unwrap_or_default()
+        .unwrap_or_default();
+    last_suffix.contains('\n') || arr.trailing().to_string().contains('\n')
 }
 
-/// Whether the closing bracket sits on its own line rather than sharing the
-/// last element/argument's line (used to pick the right recursion depth for
-/// that element's own multi-line content — see [`reindent_bracketed`]).
-fn list_closes_on_own_line<T: ElementList>(list: &mut T) -> bool {
-    list_last_suffix(list).contains('\n') || list.list_trailing().contains('\n')
+/// Whether a function call's arguments span multiple lines (mirrors
+/// [`is_multiline_array`]).
+fn is_multiline_func_args(args: &hcl_edit::expr::FuncArgs) -> bool {
+    args.trailing().to_string().contains('\n')
+        || args.iter().any(|a| {
+            a.decor()
+                .prefix()
+                .is_some_and(|p| p.to_string().contains('\n'))
+        })
 }
 
-fn list_set_last_suffix<T: ElementList>(list: &mut T, suffix: String) {
-    let len = list.list_len();
-    if len == 0 {
-        return;
-    }
-    if let Some(elem) = list.list_get_mut(len - 1) {
-        elem.decor_mut().set_suffix(suffix);
-    }
+fn func_args_close_on_own_line(args: &mut hcl_edit::expr::FuncArgs) -> bool {
+    let len = args.len();
+    let last_suffix = len
+        .checked_sub(1)
+        .and_then(|last| args.get_mut(last))
+        .and_then(|e| e.decor().suffix().map(|s| s.to_string()))
+        .unwrap_or_default();
+    last_suffix.contains('\n') || args.trailing().to_string().contains('\n')
 }
 
-/// Re-indent every own-line element/argument of a bracketed list and its
-/// closing bracket, matching `terraform fmt` / `tofu fmt`'s real behaviour:
-///
-/// - Every own-line element/argument defaults to `depth + 1`, regardless of
-///   whether the *first* element shares the opening bracket's line
-///   (`f(1,\n  2,\n3)` still puts `2` at `depth + 1` — issue: PAR-3/PAR-4).
-/// - Whichever line contains the closing bracket renders at `depth` instead,
-///   even when that line also holds the last element (`concat(var.a,\n
-///   var.b)` — `var.b)` sits at `depth`, not `depth + 1`; `f(1,\n  2,\n3)` —
-///   `3)` sits at `depth` while `2,` above it sits at `depth + 1`).
-///
-/// An element/argument that shares a line with its neighbour (no newline in
-/// its own prefix) is left untouched — `tofu fmt` never moves an inline
-/// element onto its own line. `preserve_blanks` is threaded through to
-/// [`reindented_multiline_decor`].
-///
-/// The whitespace immediately before the closing bracket lives in one of two
-/// places depending on whether the list already ends in a comma: the last
-/// element's own decor suffix when there is no trailing comma (the common
-/// case — see the encoder, which writes that suffix, then an optional
-/// trailing comma, then the list's own `trailing`), or the list's `trailing`
-/// field when there is one. Only the field that actually holds it is
-/// rewritten.
-fn reindent_bracketed<T: ElementList>(list: &mut T, depth: usize, preserve_blanks: bool) {
-    let bumped_indent = "  ".repeat(depth + 1);
-    let base_indent = "  ".repeat(depth);
-    let len = list.list_len();
-    let last_suffix = list_last_suffix(list);
-    let trailing = list.list_trailing();
-    let closes_on_own_line = last_suffix.contains('\n') || trailing.contains('\n');
-
+/// Normalize a multi-line array's own-line elements and closing `]`:
+/// preserve or collapse blank lines (`preserve_blanks`) and re-anchor
+/// own-line comments, the same way [`reindented_multiline_decor`] always
+/// has. Actual indentation is no longer computed here — the bracket-stack
+/// line pass in `post_process` (PAR-8) re-indents every physical line
+/// uniformly afterwards, so unlike the old `reindent_bracketed` this never
+/// needs to pick a target indent width.
+fn normalize_array_multiline_decor(arr: &mut Array, preserve_blanks: bool) {
+    let len = arr.len();
     for i in 0..len {
-        if let Some(elem) = list.list_get_mut(i) {
+        if let Some(elem) = arr.get_mut(i) {
             let prefix = elem
                 .decor()
                 .prefix()
                 .map(|p| p.to_string())
                 .unwrap_or_default();
             if prefix.contains('\n') {
-                let target = if i + 1 == len && !closes_on_own_line {
-                    &base_indent
-                } else {
-                    &bumped_indent
-                };
                 elem.decor_mut().set_prefix(reindented_multiline_decor(
                     &prefix,
-                    target,
+                    "",
                     preserve_blanks,
                 ));
             }
@@ -1234,88 +1175,111 @@ fn reindent_bracketed<T: ElementList>(list: &mut T, depth: usize, preserve_blank
         }
     }
 
+    let last_suffix = len
+        .checked_sub(1)
+        .and_then(|last| arr.get_mut(last))
+        .and_then(|e| e.decor().suffix().map(|s| s.to_string()))
+        .unwrap_or_default();
     if last_suffix.contains('\n') {
-        list_set_last_suffix(
-            list,
-            reindented_multiline_decor(&last_suffix, &base_indent, preserve_blanks),
-        );
-    } else if trailing.contains('\n') {
-        list.list_set_trailing(reindented_multiline_decor(
-            &trailing,
-            &base_indent,
-            preserve_blanks,
-        ));
+        if let Some(elem) = len.checked_sub(1).and_then(|last| arr.get_mut(last)) {
+            elem.decor_mut().set_suffix(reindented_multiline_decor(
+                &last_suffix,
+                "",
+                preserve_blanks,
+            ));
+        }
+    } else {
+        let trailing = arr.trailing().to_string();
+        if trailing.contains('\n') {
+            arr.set_trailing(reindented_multiline_decor(&trailing, "", preserve_blanks));
+        }
     }
 }
 
-/// Whether a function call's arguments span multiple lines (mirrors
-/// [`is_multiline_array`]).
-fn is_multiline_func_args(args: &hcl_edit::expr::FuncArgs) -> bool {
-    args.trailing().to_string().contains('\n')
-        || args.iter().any(|a| {
-            a.decor()
+/// Same normalization as [`normalize_array_multiline_decor`], for a function
+/// call's argument list.
+fn normalize_func_args_multiline_decor(args: &mut hcl_edit::expr::FuncArgs, preserve_blanks: bool) {
+    let len = args.len();
+    for i in 0..len {
+        if let Some(arg) = args.get_mut(i) {
+            let prefix = arg
+                .decor()
                 .prefix()
-                .is_some_and(|p| p.to_string().contains('\n'))
-        })
-}
+                .map(|p| p.to_string())
+                .unwrap_or_default();
+            if prefix.contains('\n') {
+                arg.decor_mut().set_prefix(reindented_multiline_decor(
+                    &prefix,
+                    "",
+                    preserve_blanks,
+                ));
+            }
+            if i + 1 == len {
+                continue;
+            }
+            let suffix = arg
+                .decor()
+                .suffix()
+                .map(|s| s.to_string())
+                .unwrap_or_default();
+            if suffix.contains('\n') && extract_comments(&suffix).is_empty() {
+                arg.decor_mut().set_suffix("");
+            }
+        }
+    }
 
-/// Prepend `extra` to the indentation on the final line of a decor string
-/// (the line the closing bracket sits on), leaving any earlier lines —
-/// including preserved blank lines — untouched.
-fn bump_trailing_indent(trailing: &str, extra: &str) -> String {
-    match trailing.rfind('\n') {
-        Some(idx) => format!("{}{extra}{}", &trailing[..=idx], &trailing[idx + 1..]),
-        None => format!("{extra}{trailing}"),
+    let last_suffix = len
+        .checked_sub(1)
+        .and_then(|last| args.get_mut(last))
+        .and_then(|e| e.decor().suffix().map(|s| s.to_string()))
+        .unwrap_or_default();
+    if last_suffix.contains('\n') {
+        if let Some(arg) = len.checked_sub(1).and_then(|last| args.get_mut(last)) {
+            arg.decor_mut().set_suffix(reindented_multiline_decor(
+                &last_suffix,
+                "",
+                preserve_blanks,
+            ));
+        }
+    } else {
+        let trailing = args.trailing().to_string();
+        if trailing.contains('\n') {
+            args.set_trailing(reindented_multiline_decor(&trailing, "", preserve_blanks));
+        }
     }
 }
 
-/// Re-indent a parenthesized expression's inner content and closing `)`,
-/// applying the same bump / closing-line rules as [`reindent_bracketed`] for
-/// its single "element" (there is no separate list to iterate: the wrapped
-/// expression's own prefix/suffix decor holds the whitespace just inside `(`
-/// and `)`).
-fn reindent_parenthesis(
+/// Normalize a parenthesized expression's inner prefix/suffix decor the same
+/// way [`normalize_array_multiline_decor`] does for a list — preserve or
+/// collapse blank lines and re-anchor own-line comments; indentation is left
+/// to the bracket-stack line pass in `post_process` (PAR-8).
+fn normalize_parenthesis_multiline_decor(
     paren: &mut hcl_edit::expr::Parenthesis,
-    depth: usize,
     preserve_blanks: bool,
 ) {
-    let bumped_indent = "  ".repeat(depth + 1);
-    let base_indent = "  ".repeat(depth);
     let prefix = paren
         .inner()
         .decor()
         .prefix()
         .map(|p| p.to_string())
         .unwrap_or_default();
+    if prefix.contains('\n') {
+        paren
+            .inner_mut()
+            .decor_mut()
+            .set_prefix(reindented_multiline_decor(&prefix, "", preserve_blanks));
+    }
     let suffix = paren
         .inner()
         .decor()
         .suffix()
         .map(|s| s.to_string())
         .unwrap_or_default();
-    let bump = prefix.contains('\n');
-    let closes_on_own_line = suffix.contains('\n');
-
-    if bump {
-        let target = if closes_on_own_line {
-            &bumped_indent
-        } else {
-            &base_indent
-        };
+    if suffix.contains('\n') {
         paren
             .inner_mut()
             .decor_mut()
-            .set_prefix(reindented_multiline_decor(&prefix, target, preserve_blanks));
-    }
-    if closes_on_own_line {
-        paren
-            .inner_mut()
-            .decor_mut()
-            .set_suffix(reindented_multiline_decor(
-                &suffix,
-                &base_indent,
-                preserve_blanks,
-            ));
+            .set_suffix(reindented_multiline_decor(&suffix, "", preserve_blanks));
     }
 }
 
@@ -1365,14 +1329,16 @@ fn format_expression(expr: &mut Expression, depth: usize, style: FormatStyle, pr
                 }
                 arr.set_trailing_comma(true);
             }
-            // Re-indentation of own-line elements/comments and the closing
-            // `]` applies under both styles — `terraform fmt` / `tofu fmt`
-            // re-indent arrays too, they just don't insert trailing commas or
-            // collapse the author's blank lines (PAR-3).
+            // Blank-line preservation/collapse and own-line comment
+            // re-anchoring for own-line elements and the closing `]` applies
+            // under both styles — `terraform fmt` / `tofu fmt` re-indent
+            // arrays too, they just don't insert trailing commas or collapse
+            // the author's blank lines (PAR-3). Actual indentation comes
+            // from the bracket-stack line pass in `post_process` (PAR-8).
             if is_multiline_array(arr) {
-                reindent_bracketed(arr, depth, !style.is_opinionated());
+                normalize_array_multiline_decor(arr, !style.is_opinionated());
             }
-            let closes_on_own_line = list_closes_on_own_line(arr);
+            let closes_on_own_line = array_closes_on_own_line(arr);
             let last_idx = arr.len().wrapping_sub(1);
             for i in 0..arr.len() {
                 if let Some(elem) = arr.get_mut(i) {
@@ -1407,12 +1373,15 @@ fn format_expression(expr: &mut Expression, depth: usize, style: FormatStyle, pr
             // already used by Array elements above so that
             // recursing into a multi-line Object / Array arg
             // hands `format_object` / inner indent calculations
-            // the right depth. Re-indentation of own-line args and the
-            // closing `)` applies under both styles (PAR-4).
+            // the right depth. Blank-line preservation/collapse and
+            // own-line comment re-anchoring for own-line args and the
+            // closing `)` applies under both styles (PAR-4); actual
+            // indentation comes from the bracket-stack line pass in
+            // `post_process` (PAR-8).
             if is_multiline_func_args(&call.args) {
-                reindent_bracketed(&mut call.args, depth, !style.is_opinionated());
+                normalize_func_args_multiline_decor(&mut call.args, !style.is_opinionated());
             }
-            let closes_on_own_line = list_closes_on_own_line(&mut call.args);
+            let closes_on_own_line = func_args_close_on_own_line(&mut call.args);
             let last_idx = call.args.len().wrapping_sub(1);
             for (i, arg) in call.args.iter_mut().enumerate() {
                 let arg_inline = arg
@@ -1428,10 +1397,10 @@ fn format_expression(expr: &mut Expression, depth: usize, style: FormatStyle, pr
             }
         }
         Expression::Parenthesis(paren) => {
-            // Re-indent the wrapped expression and closing `)` before
-            // recursing, so the recursion sees the right depth for any
-            // nested multi-line content (PAR-4).
-            reindent_parenthesis(paren, depth, !style.is_opinionated());
+            // Normalize the wrapped expression's blank lines/own-line
+            // comments before recursing (PAR-4); indentation comes from the
+            // bracket-stack line pass in `post_process` (PAR-8).
+            normalize_parenthesis_multiline_decor(paren, !style.is_opinionated());
             let bump = paren
                 .inner()
                 .decor()
@@ -1450,71 +1419,30 @@ fn format_expression(expr: &mut Expression, depth: usize, style: FormatStyle, pr
             format_expression(paren.inner_mut(), inner_depth, style, 0);
         }
         Expression::Conditional(cond) => {
-            format_expression(&mut cond.cond_expr, depth, style, 0);
             // `tofu fmt` glues a ternary's branches into one visual unit
             // when the author wrote `} : {` (or similar) on one physical
-            // line *and* the false branch itself keeps spanning further
-            // lines (`: {\n ... \n}`): the true branch's closing bracket then
-            // stays at the branch's own interior depth instead of dedenting,
-            // because that line's net bracket delta is zero (it closes the
-            // true branch and opens the false one in the same breath).
-            // When the false branch is a single-line value glued right after
-            // (`: []`), the line's net delta is negative instead — both
-            // brackets close on it — and the true branch's closing dedents
-            // normally, matching `terraform fmt` / `tofu fmt` (PAR-4).
-            let true_glued = cond
-                .true_expr
-                .decor()
-                .suffix()
-                .map(|s| s.to_string())
-                .is_none_or(|s| !s.contains('\n'));
+            // line: that line's net bracket delta is zero (it closes the
+            // true branch and opens the false one in the same breath), so
+            // the bracket-stack line pass in `post_process` (PAR-8) already
+            // keeps the true branch's closing bracket at the branch's own
+            // interior depth without any special-casing here.
+            format_expression(&mut cond.cond_expr, depth, style, 0);
             format_expression(&mut cond.true_expr, depth, style, 0);
             format_expression(&mut cond.false_expr, depth, style, 0);
-            let false_extends = cond.false_expr.to_string().contains('\n');
-            if true_glued && false_extends {
-                let extra = "  ";
-                match &mut cond.true_expr {
-                    // An object's closing indent doesn't necessarily carry an
-                    // embedded newline in its `trailing` decor — when the last
-                    // entry uses a `Newline` terminator (the common multi-line
-                    // form) that newline is emitted by the terminator itself,
-                    // and `trailing` holds only the indent. Gate on the object
-                    // actually being multi-line instead of on `trailing`'s
-                    // content; [`bump_trailing_indent`] handles both cases.
-                    Expression::Object(obj) if is_multiline_object(obj) => {
-                        let bumped = bump_trailing_indent(obj.trailing(), extra);
-                        obj.set_trailing(bumped);
-                    }
-                    // An array's closing indent lives in the last element's
-                    // own suffix unless the array ends in a trailing comma
-                    // (see `reindent_bracketed`'s doc comment).
-                    Expression::Array(arr) if is_multiline_array(arr) => {
-                        let last_suffix = list_last_suffix(arr);
-                        if last_suffix.is_empty() {
-                            let bumped = bump_trailing_indent(arr.trailing(), extra);
-                            arr.set_trailing(bumped);
-                        } else {
-                            list_set_last_suffix(arr, bump_trailing_indent(&last_suffix, extra));
-                        }
-                    }
-                    _ => {}
-                }
-            }
         }
         Expression::Traversal(trav) => {
             format_expression(&mut trav.expr, depth, style, 0);
         }
         Expression::ForExpr(for_expr) => {
             // The `for ... in C : K => V` line, an own-line `K => V`, and an
-            // own-line `if` filter each sit one level inside the
-            // for-expression's outer `[`/`{`; the closing bracket (whose
-            // whitespace lives in the suffix of whichever of `cond.expr` /
-            // `value_expr` renders last) sits back at this expression's own
-            // depth. Re-indent them before recursing so nested multi-line
-            // content sees the right depth (PAR-4).
+            // own-line `if` filter each carry their own multi-line decor
+            // (prefix/suffix) that may need blank lines preserved or
+            // collapsed, and own-line comments re-anchored — the same
+            // normalization [`reindented_multiline_decor`] applies elsewhere
+            // (PAR-4). Indentation itself comes from the bracket-stack line
+            // pass in `post_process` afterwards (PAR-8), so unlike the old
+            // per-node reindent there is no depth to compute here.
             let preserve_blanks = !style.is_opinionated();
-            let bumped = "  ".repeat(depth + 1);
-            let base = "  ".repeat(depth);
             let intro_prefix = for_expr
                 .intro
                 .decor()
@@ -1527,7 +1455,7 @@ fn format_expression(expr: &mut Expression, depth: usize, style: FormatStyle, pr
                     .decor_mut()
                     .set_prefix(reindented_multiline_decor(
                         &intro_prefix,
-                        &bumped,
+                        "",
                         preserve_blanks,
                     ));
             }
@@ -1540,7 +1468,7 @@ fn format_expression(expr: &mut Expression, depth: usize, style: FormatStyle, pr
                 if key_prefix.contains('\n') {
                     key_expr.decor_mut().set_prefix(reindented_multiline_decor(
                         &key_prefix,
-                        &bumped,
+                        "",
                         preserve_blanks,
                     ));
                 }
@@ -1557,7 +1485,7 @@ fn format_expression(expr: &mut Expression, depth: usize, style: FormatStyle, pr
                     .decor_mut()
                     .set_prefix(reindented_multiline_decor(
                         &value_prefix,
-                        &bumped,
+                        "",
                         preserve_blanks,
                     ));
             }
@@ -1580,7 +1508,7 @@ fn format_expression(expr: &mut Expression, depth: usize, style: FormatStyle, pr
                         .decor_mut()
                         .set_suffix(reindented_multiline_decor(
                             &value_suffix,
-                            &bumped,
+                            "",
                             preserve_blanks,
                         ));
                 }
@@ -1603,7 +1531,7 @@ fn format_expression(expr: &mut Expression, depth: usize, style: FormatStyle, pr
                     .decor_mut()
                     .set_suffix(reindented_multiline_decor(
                         &closing_suffix,
-                        &base,
+                        "",
                         preserve_blanks,
                     ));
             }

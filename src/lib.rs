@@ -269,6 +269,7 @@ fn post_process(output: &str, style: FormatStyle) -> String {
     }
     lines_out.append(&mut pending_blanks);
 
+    let lines_out = apply_bracket_stack_indent(lines_out);
     let lines_out = align_trailing_comments(lines_out);
 
     // Collapse any trailing blank lines so the file ends with exactly one
@@ -279,6 +280,192 @@ fn post_process(output: &str, style: FormatStyle) -> String {
     result.truncate(trimmed_len);
     result.push('\n');
     result
+}
+
+/// Lexer mode for [`bracket_net`]'s scan of a quoted string's contents:
+/// either plain string literal text, or inside a `${ … }` / `%{ … }`
+/// template interpolation (whose own bracket-nesting `depth` tracks when the
+/// interpolation's closing `}` — as opposed to some nested bracket's — is
+/// reached).
+#[derive(Clone, Copy)]
+enum StrMode {
+    Str,
+    Interp(u32),
+}
+
+/// Net count of open (`{`/`[`/`(`) minus close (`}`/`]`/`)`) bracket tokens on
+/// `line`, for the bracket-stack indent pass in [`apply_bracket_stack_indent`]
+/// — mirrors the token stream `hclwrite`'s `formatIndent` walks. Brackets
+/// inside a `#`/`//`/`/* … */` comment, or inside a quoted string's literal
+/// text, don't count. A `${ … }` interpolation's or `%{ … }` directive's own
+/// delimiters — and any brackets inside them — are real tokens and do count;
+/// a `"…"` string nested inside such an interpolation is literal text again,
+/// recursively. `mode_stack` and `in_block_comment` carry lexer state across
+/// lines, since both a string (spanning an interpolation whose own content
+/// spans lines) and a block comment can cross physical lines.
+fn bracket_net(line: &str, mode_stack: &mut Vec<StrMode>, in_block_comment: &mut bool) -> i32 {
+    let chars: Vec<char> = line.chars().collect();
+    let mut net: i32 = 0;
+    let mut i = 0;
+    while i < chars.len() {
+        if *in_block_comment {
+            if chars[i] == '*' && chars.get(i + 1) == Some(&'/') {
+                *in_block_comment = false;
+                i += 2;
+            } else {
+                i += 1;
+            }
+            continue;
+        }
+        match mode_stack.last().copied() {
+            None => match chars[i] {
+                '#' => break,
+                '/' if chars.get(i + 1) == Some(&'/') => break,
+                '/' if chars.get(i + 1) == Some(&'*') => {
+                    *in_block_comment = true;
+                    i += 2;
+                }
+                '"' => {
+                    mode_stack.push(StrMode::Str);
+                    i += 1;
+                }
+                '{' | '(' | '[' => {
+                    net += 1;
+                    i += 1;
+                }
+                '}' | ')' | ']' => {
+                    net -= 1;
+                    i += 1;
+                }
+                _ => i += 1,
+            },
+            Some(StrMode::Str) => match chars[i] {
+                '\\' => i += 2,
+                '"' => {
+                    mode_stack.pop();
+                    i += 1;
+                }
+                // `$${` / `%%{` is HCL's escape for a literal `${` / `%{`:
+                // plain text, not an interpolation opener.
+                c @ ('$' | '%')
+                    if chars.get(i + 1) == Some(&c) && chars.get(i + 2) == Some(&'{') =>
+                {
+                    i += 3;
+                }
+                '$' | '%' if chars.get(i + 1) == Some(&'{') => {
+                    mode_stack.push(StrMode::Interp(0));
+                    net += 1;
+                    i += 2;
+                }
+                _ => i += 1,
+            },
+            Some(StrMode::Interp(depth)) => match chars[i] {
+                '#' => break,
+                '/' if chars.get(i + 1) == Some(&'/') => break,
+                '/' if chars.get(i + 1) == Some(&'*') => {
+                    *in_block_comment = true;
+                    i += 2;
+                }
+                '"' => {
+                    mode_stack.push(StrMode::Str);
+                    i += 1;
+                }
+                '{' | '(' | '[' => {
+                    if let Some(StrMode::Interp(d)) = mode_stack.last_mut() {
+                        *d += 1;
+                    }
+                    net += 1;
+                    i += 1;
+                }
+                '}' if depth == 0 => {
+                    mode_stack.pop();
+                    net -= 1;
+                    i += 1;
+                }
+                '}' | ')' | ']' => {
+                    if let Some(StrMode::Interp(d)) = mode_stack.last_mut() {
+                        *d = d.saturating_sub(1);
+                    }
+                    net -= 1;
+                    i += 1;
+                }
+                _ => i += 1,
+            },
+        }
+    }
+    net
+}
+
+/// Re-indent every non-blank, non-heredoc-body line by a per-line bracket
+/// stack, matching `terraform fmt` / `tofu fmt` (`hclwrite`'s `formatIndent`):
+/// a line's own indent is `2 * stack.len()` *before* any push, a line whose
+/// net bracket delta ([`bracket_net`]) is positive then pushes that delta, and
+/// a line whose delta is negative pops entries — each popped entry's value
+/// subtracted from the amount still to consume — until consumed or the stack
+/// is empty, before computing that line's indent from the resulting depth.
+/// This one mechanism replaces the AST-level per-node re-indentation
+/// (`reindent_bracketed`, `reindent_parenthesis`, etc.): those approximated
+/// `hclwrite`'s bracket stack node by node and got every net-zero line
+/// (`}, {`, `[for x in l : {`) wrong (PAR-8).
+///
+/// Blank lines and heredoc-body/terminator lines (flagged by the caller) are
+/// left untouched — a heredoc's opener line is re-indented normally, but its
+/// body is literal string data with significant leading whitespace.
+fn apply_bracket_stack_indent(lines: Vec<(String, bool)>) -> Vec<(String, bool)> {
+    let mut stack: Vec<i32> = Vec::new();
+    let mut mode_stack: Vec<StrMode> = Vec::new();
+    let mut in_block_comment = false;
+
+    lines
+        .into_iter()
+        .map(|(line, is_heredoc)| {
+            if is_heredoc || line.trim().is_empty() {
+                return (line, is_heredoc);
+            }
+            // A line that starts already inside a `/* … */` block comment is
+            // continuation content, not a formattable line — like a heredoc
+            // body it keeps its original indentation verbatim. Its bracket
+            // net (should the comment end mid-line) still updates the stack
+            // so lines *after* it are indented correctly.
+            let continues_block_comment = in_block_comment;
+            let net = bracket_net(&line, &mut mode_stack, &mut in_block_comment);
+            let depth = update_stack(&mut stack, net);
+            if continues_block_comment {
+                return (line, false);
+            }
+            (
+                format!("{}{}", "  ".repeat(depth), line.trim_start()),
+                false,
+            )
+        })
+        .collect()
+}
+
+/// Apply one line's bracket net delta to the indent-depth stack and return
+/// the depth to indent *that* line at (measured before any push, per
+/// `hclwrite`'s `formatIndent`): a positive net pushes itself after; a
+/// negative net pops entries — each popped entry's own value subtracted from
+/// the amount still to consume — until consumed or the stack is empty,
+/// first; a zero net leaves the stack alone.
+fn update_stack(stack: &mut Vec<i32>, net: i32) -> usize {
+    match net.cmp(&0) {
+        std::cmp::Ordering::Greater => {
+            let depth = stack.len();
+            stack.push(net);
+            depth
+        }
+        std::cmp::Ordering::Less => {
+            let mut remaining = -net;
+            while remaining > 0 {
+                match stack.pop() {
+                    Some(popped) => remaining -= popped,
+                    None => break,
+                }
+            }
+            stack.len()
+        }
+        std::cmp::Ordering::Equal => stack.len(),
+    }
 }
 
 /// Vertically align trailing `#` / `//` comments across every maximal run of
