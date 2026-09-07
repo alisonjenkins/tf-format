@@ -277,3 +277,13 @@ fn fixture_for_expr_colon_spacing() {
     // Source order is preserved and wrapped bodies stay multi-line.
     run_minimal_fixture("for_expr_colon_spacing");
 }
+
+#[test]
+fn fixture_comment_chain_alignment() {
+    // `tofu fmt` / `terraform fmt` align trailing `#` comments across every
+    // run of physically consecutive commented lines, regardless of AST
+    // structure: an attribute, an object opener, a nested attribute, a
+    // closer, an array opener/element/closer all join one column. A blank
+    // line, an own-line comment, or a comment-less line breaks the run.
+    run_minimal_fixture("comment_chain_alignment");
+}
