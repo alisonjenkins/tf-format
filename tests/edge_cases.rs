@@ -437,3 +437,16 @@ fn escaped_template_marker_does_not_disturb_indent() {
         "escaped template markers must be indent-neutral"
     );
 }
+
+#[test]
+fn partial_bracket_close_keeps_interior_depth() {
+    // hclwrite's indent stack reduces a multi-opener entry in place when a
+    // line closes only some of its brackets: `}, { … })` closes two of the
+    // three openers on the `merge({` line, so it stays at the interior depth
+    // and only the final `}` pops back out (cloudposse eks-cluster auth.tf).
+    let opts = FormatOptions::minimal();
+    let input = "locals {\n  m = { for k, v in var.m : k => merge({\n    a = 1\n    }, { for kk, vv in v : kk => vv if kk != \"a\" })\n  }\n  n = 2\n}\n";
+    let out =
+        format_hcl_with(input, &opts).unwrap_or_else(|e| panic!("minimal format failed: {e}"));
+    assert_eq!(out, input, "partial close must match `tofu fmt`");
+}
