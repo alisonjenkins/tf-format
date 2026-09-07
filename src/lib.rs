@@ -220,12 +220,15 @@ fn post_process(output: &str, style: FormatStyle) -> String {
     // a backstop for arrays.
     let strip_before_close = matches!(style, FormatStyle::Opinionated);
 
-    let mut lines_out: Vec<String> = Vec::new();
+    // Each output line paired with whether it is heredoc-body content (or the
+    // terminator line) — such lines are raw string data and must never be
+    // rewritten by the comment-alignment pass below.
+    let mut lines_out: Vec<(String, bool)> = Vec::new();
     let mut heredoc_delim: Option<String> = None;
     let mut in_block_comment = false;
     // Blank lines seen outside a heredoc, held back until we know whether the
     // next non-blank line is a closing bracket (in which case they're dropped).
-    let mut pending_blanks: Vec<String> = Vec::new();
+    let mut pending_blanks: Vec<(String, bool)> = Vec::new();
 
     for line in output.lines() {
         match &heredoc_delim {
@@ -235,7 +238,7 @@ fn post_process(output: &str, style: FormatStyle) -> String {
             // for the `<<-` form.
             Some(delim) => {
                 lines_out.append(&mut pending_blanks);
-                lines_out.push(line.to_string());
+                lines_out.push((line.to_string(), true));
                 if line.trim() == delim.as_str() {
                     heredoc_delim = None;
                 }
@@ -247,7 +250,7 @@ fn post_process(output: &str, style: FormatStyle) -> String {
                 let masked = mask_comments(line, &mut in_block_comment);
                 let trimmed = line.trim_end();
                 if trimmed.is_empty() {
-                    pending_blanks.push(String::new());
+                    pending_blanks.push((String::new(), false));
                 } else {
                     let starts_close = {
                         let t = masked.trim_start();
@@ -258,13 +261,15 @@ fn post_process(output: &str, style: FormatStyle) -> String {
                     } else {
                         lines_out.append(&mut pending_blanks);
                     }
-                    lines_out.push(trimmed.to_string());
+                    lines_out.push((trimmed.to_string(), false));
                     heredoc_delim = heredoc_open_delimiter(&masked);
                 }
             }
         }
     }
     lines_out.append(&mut pending_blanks);
+
+    let lines_out = align_trailing_comments(lines_out);
 
     // Collapse any trailing blank lines so the file ends with exactly one
     // newline (Rule #8). A trailing blank line can never be inside a heredoc
@@ -274,6 +279,146 @@ fn post_process(output: &str, style: FormatStyle) -> String {
     result.truncate(trimmed_len);
     result.push('\n');
     result
+}
+
+/// Vertically align trailing `#` / `//` comments across every maximal run of
+/// consecutive lines that each carry one, matching `terraform fmt` /
+/// `tofu fmt`'s `formatCells` pass. Unlike the AST-level aligners this is a
+/// pure text pass over the fully rendered, fully indented output, so it joins
+/// a run across structural boundaries an AST walk would treat as separate
+/// scopes — an attribute line, a `b = {` opener, a nested block header, a `}`
+/// closer, an array element all belong to the same run as long as they are
+/// physically consecutive and each has a trailing comment. A line with no
+/// trailing comment, a comment-only line, a blank line, or heredoc-body
+/// content ends the run and is left untouched. Widths are measured in chars
+/// (rune count), matching `tofu fmt`'s multibyte-safe alignment.
+fn align_trailing_comments(lines: Vec<(String, bool)>) -> Vec<String> {
+    let mut in_block_comment = false;
+    let comment_at: Vec<Option<usize>> = lines
+        .iter()
+        .map(|(line, is_heredoc)| {
+            if *is_heredoc {
+                None
+            } else {
+                find_trailing_comment(line, &mut in_block_comment)
+            }
+        })
+        .collect();
+
+    let mut result: Vec<String> = lines.into_iter().map(|(line, _)| line).collect();
+
+    let content_width = |line: &str, idx: usize| -> usize {
+        line.chars()
+            .take(idx)
+            .collect::<String>()
+            .trim_end()
+            .chars()
+            .count()
+    };
+
+    let mut start = 0;
+    while start < comment_at.len() {
+        let Some(_) = comment_at[start] else {
+            start += 1;
+            continue;
+        };
+        let mut end = start + 1;
+        while end < comment_at.len() && comment_at[end].is_some() {
+            end += 1;
+        }
+        let max_width = (start..end)
+            .map(|i| content_width(&result[i], comment_at[i].unwrap_or_default()))
+            .max()
+            .unwrap_or(0);
+        for i in start..end {
+            let idx = match comment_at[i] {
+                Some(idx) => idx,
+                None => continue,
+            };
+            let chars: Vec<char> = result[i].chars().collect();
+            let content: String = chars[..idx].iter().collect();
+            let content = content.trim_end();
+            let comment: String = chars[idx..].iter().collect();
+            let padding = max_width - content_width(&result[i], idx) + 1;
+            result[i] = format!("{content}{}{comment}", " ".repeat(padding));
+        }
+        start = end;
+    }
+
+    result
+}
+
+/// Locate the start (as a char index) of a genuine trailing `#`/`//` comment
+/// on `line`, if any. Returns `None` when the line has no such comment, when
+/// the line is comment-only (no non-whitespace content before the marker —
+/// an own-line comment breaks an alignment run rather than joining it), or
+/// when the only comment marker found is a `/* … */` block comment — `tofu
+/// fmt` does not treat a block comment as an alignment cell (verified: `a = 1
+/// /* c */` next to a `#`-commented line does not join its column). Threads
+/// `in_block_comment` across calls the same way [`mask_comments`] does, so a
+/// block comment spanning multiple lines is tracked correctly.
+fn find_trailing_comment(line: &str, in_block_comment: &mut bool) -> Option<usize> {
+    let chars: Vec<char> = line.chars().collect();
+    let mut in_string = false;
+    let mut saw_block_comment = false;
+    let mut i = 0;
+    while i < chars.len() {
+        if *in_block_comment {
+            if chars[i] == '*' && chars.get(i + 1) == Some(&'/') {
+                *in_block_comment = false;
+                saw_block_comment = true;
+                i += 2;
+            } else {
+                i += 1;
+            }
+            continue;
+        }
+        if in_string {
+            match chars[i] {
+                '\\' => i += 2,
+                '"' => {
+                    in_string = false;
+                    i += 1;
+                }
+                _ => i += 1,
+            }
+            continue;
+        }
+        match chars[i] {
+            '"' => {
+                in_string = true;
+                i += 1;
+            }
+            '#' => return finish_trailing_comment(&chars, i, saw_block_comment),
+            '/' if chars.get(i + 1) == Some(&'/') => {
+                return finish_trailing_comment(&chars, i, saw_block_comment);
+            }
+            '/' if chars.get(i + 1) == Some(&'*') => {
+                saw_block_comment = true;
+                *in_block_comment = true;
+                i += 2;
+            }
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+/// Shared tail of [`find_trailing_comment`]: given the char index of a `#`/`//`
+/// marker, decide whether it is a genuine trailing comment.
+fn finish_trailing_comment(chars: &[char], idx: usize, saw_block_comment: bool) -> Option<usize> {
+    if saw_block_comment {
+        // A block comment already appeared earlier on this line; treating a
+        // second, `#`/`//` comment after it as the alignment cell is an
+        // unverified edge case, so conservatively don't align it.
+        return None;
+    }
+    let prefix: String = chars[..idx].iter().collect();
+    if prefix.trim().is_empty() {
+        None
+    } else {
+        Some(idx)
+    }
 }
 
 /// Blank out the comment portions of `line` so heredoc-opener detection never

@@ -139,17 +139,6 @@ fn key_width(s: &str) -> usize {
     s.chars().count()
 }
 
-/// Rune width of an expression's value text, excluding its surrounding decor
-/// (leading/trailing whitespace and any trailing comment held in the suffix).
-/// `terraform fmt` / `tofu fmt` align trailing comments by this rune count,
-/// mirroring the `=`-alignment measurement done by [`key_width`].
-fn expr_inner_width(expr: &Expression) -> usize {
-    let full = expr.to_string();
-    let pre = expr.decor().prefix().map(|p| p.len()).unwrap_or(0);
-    let suf = expr.decor().suffix().map(|s| s.len()).unwrap_or(0);
-    full[pre..full.len() - suf].chars().count()
-}
-
 /// If `decor` is a trailing inline comment — a `#`/`//` comment with no newline
 /// before its marker — return the comment text (from the marker to the end).
 /// A newline before the marker means the comment belongs to the *next* line,
@@ -1050,9 +1039,10 @@ fn format_expression(expr: &mut Expression, depth: usize, style: FormatStyle, pr
                     format_expression(elem, elem_depth, style, 0);
                 }
             }
-            if is_multiline_array(arr) {
-                align_array_element_comments(arr);
-            } else if arr.trailing_comma() && !arr.is_empty() {
+            // Trailing-comment alignment across the whole file happens in a
+            // single flat line pass (`align_trailing_comments` in lib.rs),
+            // which supersedes any AST-level array-specific aligner.
+            if !is_multiline_array(arr) && arr.trailing_comma() && !arr.is_empty() {
                 // `tofu fmt` renders a single-line array with a trailing comma
                 // as `…, ]` — one space before the bracket, mirroring the
                 // single-line object `…, }` form. hcl-edit leaves whatever the
@@ -1228,56 +1218,11 @@ fn align_body_attribute_group(structures: &mut [Structure]) {
             attr.value.decor_mut().set_prefix(" ");
         }
     }
-    align_body_attribute_comments(structures);
-}
-
-/// Trailing inline comment of a body attribute, if any. The comment lives in
-/// the attribute's *outer* decor suffix (e.g. `key = value # comment`). Only
-/// single-line values participate; a multi-line value places its trailing
-/// comment on a different line, so it never column-aligns.
-fn body_attr_trailing_comment(s: &Structure) -> Option<String> {
-    let attr = s.as_attribute()?;
-    if attr.value.to_string().contains('\n') {
-        return None;
-    }
-    let suffix = attr.decor().suffix()?.to_string();
-    trailing_inline_comment(&suffix).map(str::to_string)
-}
-
-/// Vertically align trailing inline comments across each maximal run of
-/// *consecutive* comment-bearing attributes, matching `terraform fmt` /
-/// `tofu fmt`. A comment-less attribute breaks the comment run even though it
-/// stays inside the same `=` alignment group. The comment column is the value
-/// start (fixed by the `=` group) plus the widest value in the comment run.
-fn align_body_attribute_comments(structures: &mut [Structure]) {
-    let mut start = 0;
-    while start < structures.len() {
-        if body_attr_trailing_comment(&structures[start]).is_none() {
-            start += 1;
-            continue;
-        }
-        let mut end = start + 1;
-        while end < structures.len() && body_attr_trailing_comment(&structures[end]).is_some() {
-            end += 1;
-        }
-        let max_width = structures[start..end]
-            .iter()
-            .filter_map(|s| s.as_attribute().map(|a| expr_inner_width(&a.value)))
-            .max()
-            .unwrap_or(0);
-        for s in structures[start..end].iter_mut() {
-            let comment = match body_attr_trailing_comment(s) {
-                Some(c) => c,
-                None => continue,
-            };
-            if let Structure::Attribute(attr) = s {
-                let padding = max_width - expr_inner_width(&attr.value) + 1;
-                attr.decor_mut()
-                    .set_suffix(format!("{}{}", " ".repeat(padding), comment));
-            }
-        }
-        start = end;
-    }
+    // Trailing-comment alignment across the whole file happens in a single
+    // flat line pass (`align_trailing_comments` in lib.rs) that runs after
+    // indentation is final, which supersedes any AST-level aligner here —
+    // it also joins runs across structural boundaries (an opener, a nested
+    // block, a closer) that this AST walk never sees as one group.
 }
 
 /// Vertically align the `=` signs of object key entries by padding the key's
@@ -1318,18 +1263,19 @@ fn align_object_key_group(entries: &mut [(ObjectKey, hcl_edit::expr::ObjectValue
         match kind {
             ObjectValueAssignment::Equals => {
                 align_equals_run(&mut entries[start..end]);
-                align_object_value_comments(&mut entries[start..end]);
             }
             ObjectValueAssignment::Colon => {
                 for (key, value) in entries[start..end].iter_mut() {
                     key.decor_mut().set_suffix(" ");
                     value.expr_mut().decor_mut().set_prefix(" ");
                 }
-                align_object_value_comments(&mut entries[start..end]);
             }
         }
         start = end;
     }
+    // Trailing-comment alignment across the whole file happens in a single
+    // flat line pass (`align_trailing_comments` in lib.rs) that runs after
+    // indentation is final, which supersedes any AST-level aligner here.
 }
 
 /// Column-align a contiguous run of single-line `=` assignments
@@ -1347,171 +1293,6 @@ fn align_equals_run(entries: &mut [(ObjectKey, hcl_edit::expr::ObjectValue)]) {
         let padding = max_key_len - key_width(&object_key_str(key)) + 1;
         key.decor_mut().set_suffix(" ".repeat(padding));
         value.expr_mut().decor_mut().set_prefix(" ");
-    }
-}
-
-/// Trailing inline comment of an object value, if any. The comment lives in
-/// the value expression's decor suffix (e.g. `key = value # comment`). Only
-/// single-line values participate.
-fn object_value_trailing_comment(value: &hcl_edit::expr::ObjectValue) -> Option<String> {
-    let expr = value.expr();
-    // Multi-line values place their trailing comment on a different line, so
-    // they never column-align. Measure the value text with decor stripped.
-    let full = expr.to_string();
-    let pre = expr.decor().prefix().map(|p| p.len()).unwrap_or(0);
-    let suf = expr.decor().suffix().map(|s| s.len()).unwrap_or(0);
-    if full[pre..full.len() - suf].contains('\n') {
-        return None;
-    }
-    let suffix = expr.decor().suffix()?.to_string();
-    trailing_inline_comment(&suffix).map(str::to_string)
-}
-
-/// Column where an object entry's value ends, in runes, measured from the
-/// entry start (after the leading indent). Equals `key` + key-suffix padding +
-/// the one-char separator (`=`/`:`) + value-prefix + value width. For an `=`
-/// run the key padding is uniform so this reduces to the value width; for a
-/// `:` run the keys are *not* padded, so the per-key length must be folded in
-/// to place the comment column correctly — matching `tofu fmt`.
-fn object_entry_value_end(key: &ObjectKey, value: &hcl_edit::expr::ObjectValue) -> usize {
-    let key_w = key_width(&object_key_str(key));
-    let key_suffix = key.decor().suffix().map(|s| s.chars().count()).unwrap_or(0);
-    let value_prefix = value
-        .expr()
-        .decor()
-        .prefix()
-        .map(|p| p.chars().count())
-        .unwrap_or(0);
-    key_w + key_suffix + 1 + value_prefix + expr_inner_width(value.expr())
-}
-
-/// Vertically align trailing inline comments across each maximal run of
-/// *consecutive* comment-bearing object entries, matching `terraform fmt` /
-/// `tofu fmt`. Mirrors [`align_body_attribute_comments`] for object literals.
-fn align_object_value_comments(entries: &mut [(ObjectKey, hcl_edit::expr::ObjectValue)]) {
-    let mut start = 0;
-    while start < entries.len() {
-        if object_value_trailing_comment(&entries[start].1).is_none() {
-            start += 1;
-            continue;
-        }
-        let mut end = start + 1;
-        while end < entries.len() && object_value_trailing_comment(&entries[end].1).is_some() {
-            end += 1;
-        }
-        let max_width = entries[start..end]
-            .iter()
-            .map(|(k, v)| object_entry_value_end(k, v))
-            .max()
-            .unwrap_or(0);
-        for (key, value) in entries[start..end].iter_mut() {
-            let comment = match object_value_trailing_comment(value) {
-                Some(c) => c,
-                None => continue,
-            };
-            let padding = max_width - object_entry_value_end(key, value) + 1;
-            value
-                .expr_mut()
-                .decor_mut()
-                .set_suffix(format!("{}{}", " ".repeat(padding), comment));
-        }
-        start = end;
-    }
-}
-
-/// Vertically align trailing inline comments of multi-line array elements,
-/// matching `terraform fmt` / `tofu fmt`. Unlike objects, an array element's
-/// trailing comment is NOT in its own decor: the comma is rendered between
-/// elements, so element `i`'s trailing comment lives in element `i+1`'s
-/// *prefix* (the part before the newline), and the last element's lives in
-/// `arr.trailing()`. Comments align across each maximal run of consecutive
-/// comment-bearing elements; a comment-less element breaks the run.
-fn align_array_element_comments(arr: &mut Array) {
-    let n = arr.len();
-    if n == 0 {
-        return;
-    }
-    let trailing_comma = arr.trailing_comma();
-
-    // Per element: rune width of the value (decor stripped) and whether it is
-    // single-line. The column where the value+comma ends drives the comment
-    // column: value_end = value width + 1 for the comma (every element in a
-    // comment run is followed by one — interior commas always exist, and the
-    // last element only carries a trailing comment when it has a comma too).
-    let value_end = |i: usize, arr: &Array| -> Option<usize> {
-        let e = arr.get(i)?;
-        let full = e.to_string();
-        let pre = e.decor().prefix().map(|p| p.len()).unwrap_or(0);
-        let suf = e.decor().suffix().map(|s| s.len()).unwrap_or(0);
-        let inner = &full[pre..full.len() - suf];
-        if inner.contains('\n') {
-            return None; // multi-line element: trailing comment isn't on the value line
-        }
-        let comma = if i + 1 < n || trailing_comma { 1 } else { 0 };
-        Some(inner.chars().count() + comma)
-    };
-
-    // The decor slot holding element `i`'s trailing comment.
-    let slot = |i: usize, arr: &Array| -> String {
-        if i + 1 < n {
-            arr.get(i + 1)
-                .and_then(|e| e.decor().prefix().map(|p| p.to_string()))
-                .unwrap_or_default()
-        } else {
-            arr.trailing().to_string()
-        }
-    };
-    // The inline portion of a slot is everything before its first newline.
-    let inline_comment_of = |s: &str| -> Option<String> {
-        let inline = s.split('\n').next().unwrap_or("");
-        trailing_inline_comment(inline).map(str::to_string)
-    };
-
-    let has_comment = |i: usize, arr: &Array| -> bool {
-        value_end(i, arr).is_some() && inline_comment_of(&slot(i, arr)).is_some()
-    };
-
-    // Compute new slot strings for each comment run, then apply them.
-    let mut updates: Vec<(usize, String)> = Vec::new();
-    let mut start = 0;
-    while start < n {
-        if !has_comment(start, arr) {
-            start += 1;
-            continue;
-        }
-        let mut end = start + 1;
-        while end < n && has_comment(end, arr) {
-            end += 1;
-        }
-        let max_end = (start..end)
-            .filter_map(|i| value_end(i, arr))
-            .max()
-            .unwrap_or(0);
-        for i in start..end {
-            let (Some(ve), s) = (value_end(i, arr), slot(i, arr)) else {
-                continue;
-            };
-            let Some(comment) = inline_comment_of(&s) else {
-                continue;
-            };
-            let rest = match s.find('\n') {
-                Some(nl) => &s[nl..],
-                None => "",
-            };
-            let padding = max_end - ve + 1;
-            updates.push((i, format!("{}{}{}", " ".repeat(padding), comment, rest)));
-        }
-        start = end;
-    }
-
-    for (i, new_slot) in updates {
-        if i + 1 < n {
-            if let Some(e) = arr.get_mut(i + 1) {
-                e.decor_mut().set_prefix(new_slot);
-            }
-        } else {
-            arr.set_trailing(new_slot);
-        }
     }
 }
 
@@ -1871,10 +1652,11 @@ fn normalize_terminator(
         // emitted after a line comment would be swallowed into the comment.
         //
         // A single trailing inline comment is kept verbatim: its leading
-        // whitespace is the column-alignment padding set by
-        // `align_object_value_comments`, which a blanket single-space rebuild
-        // would destroy. Multi-comment / block-comment suffixes fall back to
-        // the canonical single-space rebuild.
+        // whitespace becomes column-alignment padding in the flat line pass
+        // (`align_trailing_comments` in lib.rs) that runs once the whole file
+        // is rendered, and a blanket single-space rebuild here would destroy
+        // that. Multi-comment / block-comment suffixes fall back to the
+        // canonical single-space rebuild.
         if comments.len() != 1 || trailing_inline_comment(&suffix).is_none() {
             let mut kept = String::new();
             for comment in &comments {

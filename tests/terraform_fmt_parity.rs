@@ -441,6 +441,58 @@ fn parity_body_trailing_comment_alignment() {
 }
 
 #[test]
+fn parity_comment_chain_alignment_crosses_structures() {
+    // `tofu fmt` aligns trailing comments across every run of physically
+    // consecutive commented lines regardless of AST structure: an attribute,
+    // an object opener, a nested attribute, the object's closer, an array
+    // opener/element/closer, and a nested block header/attribute/closer all
+    // join one column as long as each line carries a trailing comment.
+    let input = r#"locals {
+  a = 1 # c1
+  b = { # c2
+    x = 1 # c3
+    yyyy = 2 # c4
+  } # c5
+  cc = 2 # c6
+  d = [ # c7
+    1, # c8
+    22, # c9
+  ] # c10
+  e = 3 # c11
+}
+resource "a" "b" { # c12
+  a = 1 # c13
+  nested { # c14
+    z = 1 # c15
+  } # c16
+} # c17
+"#;
+    check_parity_minimal("comment_chain_alignment_crosses_structures", input);
+}
+
+#[test]
+fn parity_comment_chain_alignment_breaks() {
+    // A blank line, an own-line comment, and a comment-less line each end an
+    // alignment run — but a following block opener whose *closer* has no
+    // comment (`f = { # c6` / `}`) does NOT break the run above it, since the
+    // opener line itself still carries a trailing comment.
+    let input = r#"locals {
+  a = 1 # c1
+
+  bbbb = 2 # c2
+  # own line
+  c = 3 # c3
+  dddddddd = 4
+  e = 5 # c5
+  f = { # c6
+  }
+  g = 6 # c7
+}
+"#;
+    check_parity_minimal("comment_chain_alignment_breaks", input);
+}
+
+#[test]
 fn parity_object_trailing_comment_alignment() {
     // Trailing inline comments inside an object literal align by the value's
     // end column across each consecutive comment-bearing run.

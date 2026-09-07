@@ -390,3 +390,12 @@ fn fixture_map_trailing_commas_normalized() {
     // mixed single-line/multi-line-entry map.
     run_fixture("map_trailing_commas_normalized");
 }
+
+#[test]
+fn fixture_comment_chain_alignment() {
+    // `tofu fmt` aligns trailing comments across every run of consecutive
+    // commented lines regardless of structure: a block header, a nested
+    // attribute, and the block's closer all join one comment column even
+    // though an AST walk treats them as different structures.
+    run_fixture("comment_chain_alignment");
+}
