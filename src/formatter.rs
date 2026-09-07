@@ -1122,6 +1122,21 @@ impl ElementList for Array {
     }
 }
 
+impl ElementList for hcl_edit::expr::FuncArgs {
+    fn list_len(&self) -> usize {
+        self.len()
+    }
+    fn list_get_mut(&mut self, index: usize) -> Option<&mut Expression> {
+        self.get_mut(index)
+    }
+    fn list_trailing(&self) -> String {
+        self.trailing().to_string()
+    }
+    fn list_set_trailing(&mut self, trailing: String) {
+        self.set_trailing(trailing);
+    }
+}
+
 /// Whitespace text of the last element's decor suffix, or an empty string
 /// when the list is empty.
 fn list_last_suffix<T: ElementList>(list: &mut T) -> String {
@@ -1151,19 +1166,20 @@ fn list_set_last_suffix<T: ElementList>(list: &mut T, suffix: String) {
     }
 }
 
-/// Re-indent every own-line element of a bracketed list and its closing
-/// bracket, matching `terraform fmt` / `tofu fmt`'s real behaviour:
+/// Re-indent every own-line element/argument of a bracketed list and its
+/// closing bracket, matching `terraform fmt` / `tofu fmt`'s real behaviour:
 ///
-/// - Every own-line element defaults to `depth + 1`, regardless of whether
-///   the *first* element shares the opening bracket's line (`[1,\n  2,\n3]`
-///   still puts `2` at `depth + 1` — issue: PAR-3).
+/// - Every own-line element/argument defaults to `depth + 1`, regardless of
+///   whether the *first* element shares the opening bracket's line
+///   (`f(1,\n  2,\n3)` still puts `2` at `depth + 1` — issue: PAR-3/PAR-4).
 /// - Whichever line contains the closing bracket renders at `depth` instead,
-///   even when that line also holds the last element (`[1,\n  2,\n3]` — `3]`
-///   sits at `depth` while `2,` above it sits at `depth + 1`).
+///   even when that line also holds the last element (`concat(var.a,\n
+///   var.b)` — `var.b)` sits at `depth`, not `depth + 1`; `f(1,\n  2,\n3)` —
+///   `3)` sits at `depth` while `2,` above it sits at `depth + 1`).
 ///
-/// An element that shares a line with its neighbour (no newline in its own
-/// prefix) is left untouched — `tofu fmt` never moves an inline element onto
-/// its own line. `preserve_blanks` is threaded through to
+/// An element/argument that shares a line with its neighbour (no newline in
+/// its own prefix) is left untouched — `tofu fmt` never moves an inline
+/// element onto its own line. `preserve_blanks` is threaded through to
 /// [`reindented_multiline_decor`].
 ///
 /// The whitespace immediately before the closing bracket lives in one of two
@@ -1229,6 +1245,77 @@ fn reindent_bracketed<T: ElementList>(list: &mut T, depth: usize, preserve_blank
             &base_indent,
             preserve_blanks,
         ));
+    }
+}
+
+/// Whether a function call's arguments span multiple lines (mirrors
+/// [`is_multiline_array`]).
+fn is_multiline_func_args(args: &hcl_edit::expr::FuncArgs) -> bool {
+    args.trailing().to_string().contains('\n')
+        || args.iter().any(|a| {
+            a.decor()
+                .prefix()
+                .is_some_and(|p| p.to_string().contains('\n'))
+        })
+}
+
+/// Prepend `extra` to the indentation on the final line of a decor string
+/// (the line the closing bracket sits on), leaving any earlier lines —
+/// including preserved blank lines — untouched.
+fn bump_trailing_indent(trailing: &str, extra: &str) -> String {
+    match trailing.rfind('\n') {
+        Some(idx) => format!("{}{extra}{}", &trailing[..=idx], &trailing[idx + 1..]),
+        None => format!("{extra}{trailing}"),
+    }
+}
+
+/// Re-indent a parenthesized expression's inner content and closing `)`,
+/// applying the same bump / closing-line rules as [`reindent_bracketed`] for
+/// its single "element" (there is no separate list to iterate: the wrapped
+/// expression's own prefix/suffix decor holds the whitespace just inside `(`
+/// and `)`).
+fn reindent_parenthesis(
+    paren: &mut hcl_edit::expr::Parenthesis,
+    depth: usize,
+    preserve_blanks: bool,
+) {
+    let bumped_indent = "  ".repeat(depth + 1);
+    let base_indent = "  ".repeat(depth);
+    let prefix = paren
+        .inner()
+        .decor()
+        .prefix()
+        .map(|p| p.to_string())
+        .unwrap_or_default();
+    let suffix = paren
+        .inner()
+        .decor()
+        .suffix()
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+    let bump = prefix.contains('\n');
+    let closes_on_own_line = suffix.contains('\n');
+
+    if bump {
+        let target = if closes_on_own_line {
+            &bumped_indent
+        } else {
+            &base_indent
+        };
+        paren
+            .inner_mut()
+            .decor_mut()
+            .set_prefix(reindented_multiline_decor(&prefix, target, preserve_blanks));
+    }
+    if closes_on_own_line {
+        paren
+            .inner_mut()
+            .decor_mut()
+            .set_suffix(reindented_multiline_decor(
+                &suffix,
+                &base_indent,
+                preserve_blanks,
+            ));
     }
 }
 
@@ -1320,36 +1407,213 @@ fn format_expression(expr: &mut Expression, depth: usize, style: FormatStyle, pr
             // already used by Array elements above so that
             // recursing into a multi-line Object / Array arg
             // hands `format_object` / inner indent calculations
-            // the right depth.
-            for arg in call.args.iter_mut() {
+            // the right depth. Re-indentation of own-line args and the
+            // closing `)` applies under both styles (PAR-4).
+            if is_multiline_func_args(&call.args) {
+                reindent_bracketed(&mut call.args, depth, !style.is_opinionated());
+            }
+            let closes_on_own_line = list_closes_on_own_line(&mut call.args);
+            let last_idx = call.args.len().wrapping_sub(1);
+            for (i, arg) in call.args.iter_mut().enumerate() {
                 let arg_inline = arg
                     .decor()
                     .prefix()
                     .is_none_or(|p| !p.to_string().contains('\n'));
-                let arg_depth = if arg_inline { depth } else { depth + 1 };
+                let arg_depth = if arg_inline || (i == last_idx && !closes_on_own_line) {
+                    depth
+                } else {
+                    depth + 1
+                };
                 format_expression(arg, arg_depth, style, 0);
             }
         }
         Expression::Parenthesis(paren) => {
-            format_expression(paren.inner_mut(), depth, style, 0);
+            // Re-indent the wrapped expression and closing `)` before
+            // recursing, so the recursion sees the right depth for any
+            // nested multi-line content (PAR-4).
+            reindent_parenthesis(paren, depth, !style.is_opinionated());
+            let bump = paren
+                .inner()
+                .decor()
+                .prefix()
+                .is_some_and(|p| p.to_string().contains('\n'));
+            let closes_on_own_line = paren
+                .inner()
+                .decor()
+                .suffix()
+                .is_some_and(|s| s.to_string().contains('\n'));
+            let inner_depth = if bump && closes_on_own_line {
+                depth + 1
+            } else {
+                depth
+            };
+            format_expression(paren.inner_mut(), inner_depth, style, 0);
         }
         Expression::Conditional(cond) => {
             format_expression(&mut cond.cond_expr, depth, style, 0);
+            // `tofu fmt` glues a ternary's branches into one visual unit
+            // when the author wrote `} : {` (or similar) on one physical
+            // line *and* the false branch itself keeps spanning further
+            // lines (`: {\n ... \n}`): the true branch's closing bracket then
+            // stays at the branch's own interior depth instead of dedenting,
+            // because that line's net bracket delta is zero (it closes the
+            // true branch and opens the false one in the same breath).
+            // When the false branch is a single-line value glued right after
+            // (`: []`), the line's net delta is negative instead — both
+            // brackets close on it — and the true branch's closing dedents
+            // normally, matching `terraform fmt` / `tofu fmt` (PAR-4).
+            let true_glued = cond
+                .true_expr
+                .decor()
+                .suffix()
+                .map(|s| s.to_string())
+                .is_none_or(|s| !s.contains('\n'));
             format_expression(&mut cond.true_expr, depth, style, 0);
             format_expression(&mut cond.false_expr, depth, style, 0);
+            let false_extends = cond.false_expr.to_string().contains('\n');
+            if true_glued && false_extends {
+                let extra = "  ";
+                match &mut cond.true_expr {
+                    // An object's closing indent doesn't necessarily carry an
+                    // embedded newline in its `trailing` decor — when the last
+                    // entry uses a `Newline` terminator (the common multi-line
+                    // form) that newline is emitted by the terminator itself,
+                    // and `trailing` holds only the indent. Gate on the object
+                    // actually being multi-line instead of on `trailing`'s
+                    // content; [`bump_trailing_indent`] handles both cases.
+                    Expression::Object(obj) if is_multiline_object(obj) => {
+                        let bumped = bump_trailing_indent(obj.trailing(), extra);
+                        obj.set_trailing(bumped);
+                    }
+                    // An array's closing indent lives in the last element's
+                    // own suffix unless the array ends in a trailing comma
+                    // (see `reindent_bracketed`'s doc comment).
+                    Expression::Array(arr) if is_multiline_array(arr) => {
+                        let last_suffix = list_last_suffix(arr);
+                        if last_suffix.is_empty() {
+                            let bumped = bump_trailing_indent(arr.trailing(), extra);
+                            arr.set_trailing(bumped);
+                        } else {
+                            list_set_last_suffix(arr, bump_trailing_indent(&last_suffix, extra));
+                        }
+                    }
+                    _ => {}
+                }
+            }
         }
         Expression::Traversal(trav) => {
             format_expression(&mut trav.expr, depth, style, 0);
         }
         Expression::ForExpr(for_expr) => {
-            // The for-expression's `for ... in C : K => V` line lives
-            // one level inside the for-expression's outer `[`/`{`.
-            // Sub-expressions whose CONTENT spans multiple lines
-            // (most commonly `value_expr` when it's an object or
-            // array) need their inner depth bumped by one so the
-            // keys/elements line up at the right column. Without the
-            // bump, an inner `{ name = ..., type = ... }` lands at
-            // the same indent as the for-line itself.
+            // The `for ... in C : K => V` line, an own-line `K => V`, and an
+            // own-line `if` filter each sit one level inside the
+            // for-expression's outer `[`/`{`; the closing bracket (whose
+            // whitespace lives in the suffix of whichever of `cond.expr` /
+            // `value_expr` renders last) sits back at this expression's own
+            // depth. Re-indent them before recursing so nested multi-line
+            // content sees the right depth (PAR-4).
+            let preserve_blanks = !style.is_opinionated();
+            let bumped = "  ".repeat(depth + 1);
+            let base = "  ".repeat(depth);
+            let intro_prefix = for_expr
+                .intro
+                .decor()
+                .prefix()
+                .map(|p| p.to_string())
+                .unwrap_or_default();
+            if intro_prefix.contains('\n') {
+                for_expr
+                    .intro
+                    .decor_mut()
+                    .set_prefix(reindented_multiline_decor(
+                        &intro_prefix,
+                        &bumped,
+                        preserve_blanks,
+                    ));
+            }
+            if let Some(key_expr) = &mut for_expr.key_expr {
+                let key_prefix = key_expr
+                    .decor()
+                    .prefix()
+                    .map(|p| p.to_string())
+                    .unwrap_or_default();
+                if key_prefix.contains('\n') {
+                    key_expr.decor_mut().set_prefix(reindented_multiline_decor(
+                        &key_prefix,
+                        &bumped,
+                        preserve_blanks,
+                    ));
+                }
+            }
+            let value_prefix = for_expr
+                .value_expr
+                .decor()
+                .prefix()
+                .map(|p| p.to_string())
+                .unwrap_or_default();
+            if value_prefix.contains('\n') {
+                for_expr
+                    .value_expr
+                    .decor_mut()
+                    .set_prefix(reindented_multiline_decor(
+                        &value_prefix,
+                        &bumped,
+                        preserve_blanks,
+                    ));
+            }
+            // An own-line `if` filter's indentation isn't `cond`'s own prefix
+            // decor (there's no literal separator between `value_expr` and
+            // `if` for that prefix to attach to) — the parser attaches it to
+            // `value_expr`'s *suffix* instead, matching the pattern seen in
+            // bracketed lists (PAR-3/4): whitespace with no following
+            // separator token lands on the preceding expression's suffix.
+            if for_expr.cond.is_some() {
+                let value_suffix = for_expr
+                    .value_expr
+                    .decor()
+                    .suffix()
+                    .map(|s| s.to_string())
+                    .unwrap_or_default();
+                if value_suffix.contains('\n') {
+                    for_expr
+                        .value_expr
+                        .decor_mut()
+                        .set_suffix(reindented_multiline_decor(
+                            &value_suffix,
+                            &bumped,
+                            preserve_blanks,
+                        ));
+                }
+            }
+            // The whitespace right before the closing bracket lives in the
+            // suffix of whichever expression renders last: the `if` filter's
+            // expression when present, otherwise `value_expr`.
+            let closing_suffix_expr: &mut Expression = if let Some(cond) = &mut for_expr.cond {
+                &mut cond.expr
+            } else {
+                &mut for_expr.value_expr
+            };
+            let closing_suffix = closing_suffix_expr
+                .decor()
+                .suffix()
+                .map(|s| s.to_string())
+                .unwrap_or_default();
+            if closing_suffix.contains('\n') {
+                closing_suffix_expr
+                    .decor_mut()
+                    .set_suffix(reindented_multiline_decor(
+                        &closing_suffix,
+                        &base,
+                        preserve_blanks,
+                    ));
+            }
+
+            // Sub-expressions whose CONTENT spans multiple lines (most
+            // commonly `value_expr` when it's an object or array) need their
+            // inner depth bumped by one so the keys/elements line up at the
+            // right column. Without the bump, an inner
+            // `{ name = ..., type = ... }` lands at the same indent as the
+            // for-line itself.
             format_expression(&mut for_expr.intro.collection_expr, depth + 1, style, 0);
             if let Some(key_expr) = &mut for_expr.key_expr {
                 format_expression(key_expr, depth + 1, style, 0);

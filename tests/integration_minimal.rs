@@ -326,3 +326,11 @@ fn fixture_array_reindent() {
     // `tofu fmt` byte-for-byte.
     run_minimal_fixture("array_reindent");
 }
+
+#[test]
+fn fixture_expr_reindent() {
+    // PAR-4: func-call args, a parenthesized expression, a ternary's
+    // branches, and for-expression lines never got re-indented in minimal
+    // mode. Must match `tofu fmt` byte-for-byte.
+    run_minimal_fixture("expr_reindent");
+}
