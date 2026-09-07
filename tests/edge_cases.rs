@@ -399,3 +399,25 @@ fn empty_input_idempotent_in_minimal_style() {
     let once = format_hcl_with("", &opts).unwrap_or_else(|e| panic!("minimal format failed: {e}"));
     assert_eq!(once, "");
 }
+
+#[test]
+fn object_brace_line_entry_gap_does_not_grow_on_repeat_format() {
+    // Regression: an object whose first entry sat on the `{` line and last
+    // entry on the `}` line built the gap before `}` from an indent string
+    // (`closing_indent`) instead of a fixed single space. Re-formatting kept
+    // widening it: pass 1 gave `2  }`, pass 2 gave `2    }`, and so on.
+    let opts = FormatOptions::minimal();
+    let input = "locals {\n  b = {a = 1,\n  bb = 2}\n}\n";
+    let once =
+        format_hcl_with(input, &opts).unwrap_or_else(|e| panic!("minimal format failed: {e}"));
+    assert_eq!(
+        once, "locals {\n  b = { a = 1,\n  bb = 2 }\n}\n",
+        "minimal output must match `tofu fmt` (single space before `}}`)"
+    );
+    let twice = format_hcl_with(&once, &opts)
+        .unwrap_or_else(|e| panic!("second minimal format failed: {e}"));
+    assert_eq!(
+        twice, once,
+        "gap before `}}` must not grow on a second format pass"
+    );
+}

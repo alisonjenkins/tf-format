@@ -257,6 +257,30 @@ fn count_leading_newlines(prefix: &str) -> usize {
     count
 }
 
+/// Whether the object's overall last entry sits on the same physical line as
+/// the closing `}` under minimal style. A `Newline` terminator means the
+/// entry itself ended with a line break that the object's `old_trailing`
+/// decor doesn't carry (`old_trailing` there holds only the plain
+/// indentation before `}`, not the newline — hcl-edit attaches the newline
+/// to the terminator, not the trailing decor), so a `Newline`-terminated
+/// entry never shares `}`'s line regardless of what `old_trailing` looks
+/// like; only `None`/`Comma` terminators followed by a newline-free trailing
+/// do.
+fn last_entry_shares_close_brace(terminator: ObjectValueTerminator, old_trailing: &str) -> bool {
+    !matches!(terminator, ObjectValueTerminator::Newline) && !old_trailing.contains('\n')
+}
+
+/// Whether an object key's source prefix holds no line break at all, i.e. the
+/// entry shared a physical line with whatever preceded it (the opening `{`,
+/// or a comma-terminated previous entry). A prefix that starts with an inline
+/// comment (`{ # note`) still contains the comment's newline, so it counts as
+/// an own-line entry — `count_leading_newlines` would stop at the `#`.
+fn key_shares_previous_line(key: &ObjectKey) -> bool {
+    key.decor()
+        .prefix()
+        .is_none_or(|p| !p.to_string().contains('\n'))
+}
+
 /// Extract comments from a decor prefix string.
 ///
 /// Each returned entry is one logical comment and may span multiple lines (a
@@ -1600,6 +1624,11 @@ fn is_multiline_object(obj: &Object) -> bool {
 /// preserved and each group is sorted/aligned independently.
 fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
     let indent = "  ".repeat(depth + 1);
+    // Width used for whichever entry ends up sharing a physical line with
+    // the closing `}` under minimal style — one level shallower than a
+    // normal entry, matching `tofu fmt` (it never indents that entry to the
+    // full nested depth; see `format_object`'s trailing handling below).
+    let closing_indent = "  ".repeat(depth);
 
     // Preserve object-level decor
     let obj_decor = obj.decor().clone();
@@ -1667,6 +1696,7 @@ fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
     // Process each group: partition single/multi, sort, align, re-insert.
     let mut is_first = true;
     let mut last_terminator = ObjectValueTerminator::Newline;
+    let num_groups = groups.len();
 
     for (group_idx, group_entries) in groups.into_iter().enumerate() {
         // Whether this group needs a blank line before its first entry.
@@ -1699,12 +1729,31 @@ fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
                 value.expr_mut().decor_mut().set_prefix(" ");
             }
         } else {
-            align_object_entries_in_place(&mut single);
+            // An entry that shares a physical line with the opening `{` or
+            // the closing `}` never joins an `=`-alignment run under
+            // `tofu fmt` — only the standalone entries in between align with
+            // each other (verified against `tofu fmt` for first-only,
+            // last-only, and both-shared inputs).
+            let first_shares_open_brace = is_first
+                && single
+                    .first()
+                    .is_some_and(|(k, _)| key_shares_previous_line(k));
+            let last_shares_close_brace = group_idx + 1 == num_groups
+                && single.last().is_some_and(|(_, v)| {
+                    last_entry_shares_close_brace(v.terminator(), &old_trailing)
+                });
+            align_object_entries_in_place(
+                &mut single,
+                first_shares_open_brace,
+                last_shares_close_brace,
+            );
         }
 
         let has_single = !single.is_empty();
+        let is_last_group = group_idx + 1 == num_groups;
+        let single_len = single.len();
 
-        for (mut key, mut value) in single {
+        for (entry_idx, (mut key, mut value)) in single.into_iter().enumerate() {
             // After a Newline-terminated entry the line break is already
             // emitted by that terminator, so this entry sits on its own line
             // regardless of its own prefix. After a comma (or no terminator)
@@ -1728,7 +1777,29 @@ fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
                 // the previous terminator.
                 !is_first && !prev_was_newline && had_source_newline
             };
-            let add_structural = is_first || needs_leading_newline;
+            // Minimal: the first entry only gets a structural newline after
+            // `{` when the author actually wrote one there — `tofu fmt` keeps
+            // a brace-line first entry (`{a = 1,`) inline rather than
+            // exploding it onto its own line.
+            let add_structural = if style.is_opinionated() {
+                is_first || needs_leading_newline
+            } else {
+                (is_first && had_source_newline) || needs_leading_newline
+            };
+            // The entry that ends up sharing a physical line with the
+            // closing `}` (last entry overall, when the author left no
+            // newline before `}`) is indented one level shallower than a
+            // standalone entry — `tofu fmt` never nests it to the full
+            // depth, regardless of what the source originally wrote there.
+            let is_last_entry_overall = is_last_group && entry_idx + 1 == single_len;
+            let shares_close_brace = !style.is_opinionated()
+                && is_last_entry_overall
+                && last_entry_shares_close_brace(value.terminator(), &old_trailing);
+            let entry_indent: &str = if shares_close_brace {
+                &closing_indent
+            } else {
+                &indent
+            };
             // A comment on the first physical line of an entry's prefix is an
             // inline trailing comment of the PREVIOUS entry — the ` # note`
             // that followed its comma terminator (a comma ends the value, so
@@ -1754,10 +1825,9 @@ fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
             // after the comma — but only when there is no inline comment to
             // carry, since the comment supplies its own line break.
             let same_line = !style.is_opinionated()
-                && !is_first
-                && !prev_was_newline
                 && !had_source_newline
-                && inline_comment.is_none();
+                && inline_comment.is_none()
+                && (is_first || !prev_was_newline);
             let blank_lines = object_entry_blank_lines(
                 style,
                 &key,
@@ -1780,10 +1850,19 @@ fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
                     blank_lines,
                     inline_comment.as_deref(),
                     &comments,
-                    &indent,
+                    entry_indent,
                 )
             };
             key.decor_mut().set_prefix(prefix);
+            // Minimal, no-comma last entry sharing `}`'s line: the source
+            // whitespace between the value and `}` parses onto the value's
+            // own suffix decor, not onto the object's trailing (which is set
+            // to a canonical single space just below). Clear it here so a
+            // second format pass doesn't add its own single space on top of
+            // one already baked into this decor, growing on every run.
+            if shares_close_brace && matches!(value.terminator(), ObjectValueTerminator::None) {
+                value.expr_mut().decor_mut().set_suffix("");
+            }
             normalize_terminator(&mut value, style, use_commas);
             last_terminator = value.terminator();
             obj.insert(key, value);
@@ -1836,7 +1915,6 @@ fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
     // prepend one ourselves so `}` doesn't end up on the same line as the
     // last value.
     *obj.decor_mut() = obj_decor;
-    let closing_indent = "  ".repeat(depth);
     let trailing = if style.is_opinionated() {
         // Opinionated: drop any blank lines before `}`; keep just the newline
         // (added here when the last terminator didn't already supply one).
@@ -1851,9 +1929,19 @@ fn format_object(obj: &mut Object, depth: usize, style: FormatStyle) {
                 None => format!("\n{closing_indent}"),
             },
         }
+    } else if last_entry_shares_close_brace(last_terminator, &old_trailing) {
+        // The last entry sits on the same physical line as `}` — `tofu fmt`
+        // collapses whatever whitespace was there to a single space rather
+        // than an indent string, since `}` is joining the entry's own line
+        // rather than starting a new one.
+        " ".to_string()
     } else {
-        // Minimal (`tofu fmt` parity): preserve the original blank lines before
-        // `}`, re-indenting only the final line that the `}` sits on.
+        // Minimal (`tofu fmt` parity): preserve the original blank lines
+        // before `}`, re-indenting only the final line that `}` sits on. A
+        // `Newline`-terminated last entry supplies its own line break when
+        // rendered (the terminator itself, not this decor), so `old_trailing`
+        // holding no `\n` here just means plain indentation with no blank
+        // lines above it — `closing_indent` alone is correct.
         match old_trailing.rfind('\n') {
             Some(idx) => format!("{}{closing_indent}", &old_trailing[..=idx]),
             None => closing_indent,
@@ -1919,24 +2007,52 @@ fn normalize_terminator(
     }
 }
 
+/// Whether `entries[i]` must stay out of an `=`-alignment run: either its
+/// value itself breaks alignment (multi-line, heredoc-adjacent — see
+/// `object_value_breaks_alignment`), or it is the boundary entry sharing a
+/// physical line with the object's opening `{` or closing `}` (`tofu fmt`
+/// never pads those into the column of their standalone neighbours).
+fn entry_breaks_alignment(
+    entries: &[(ObjectKey, hcl_edit::expr::ObjectValue)],
+    i: usize,
+    first_shares_open_brace: bool,
+    last_shares_close_brace: bool,
+) -> bool {
+    object_value_breaks_alignment(&entries[i].1)
+        || (i == 0 && first_shares_open_brace)
+        || (i + 1 == entries.len() && last_shares_close_brace)
+}
+
 /// Align `=` across each contiguous run of single-line object
 /// entries inside `entries`, leaving multi-line entries with a
 /// plain single-space `=` on either side. Used in Minimal mode
 /// where the entries vector still holds the original mixed order.
-fn align_object_entries_in_place(entries: &mut [(ObjectKey, hcl_edit::expr::ObjectValue)]) {
+/// `first_shares_open_brace` / `last_shares_close_brace` mark whether the
+/// first/last entry of this group is also the object's overall first/last
+/// entry sitting on the `{`/`}` line — those are excluded from alignment.
+fn align_object_entries_in_place(
+    entries: &mut [(ObjectKey, hcl_edit::expr::ObjectValue)],
+    first_shares_open_brace: bool,
+    last_shares_close_brace: bool,
+) {
     let mut i = 0;
     while i < entries.len() {
-        // Skip multi-line entries — give them the canonical single
-        // space on either side of `=` and advance. Heredoc values are NOT
-        // skipped: their `=` is on the opening line, so they align with their
-        // single-line neighbours (matching `tofu fmt`).
-        while i < entries.len() && object_value_breaks_alignment(&entries[i].1) {
+        // Skip entries that can't join a run — give them the canonical
+        // single space on either side of `=` and advance. Heredoc values are
+        // NOT skipped by `object_value_breaks_alignment`: their `=` is on the
+        // opening line, so they align with their single-line neighbours
+        // (matching `tofu fmt`).
+        while i < entries.len()
+            && entry_breaks_alignment(entries, i, first_shares_open_brace, last_shares_close_brace)
+        {
             entries[i].0.decor_mut().set_suffix(" ");
             entries[i].1.expr_mut().decor_mut().set_prefix(" ");
             i += 1;
         }
         let run_start = i;
-        while i < entries.len() && !object_value_breaks_alignment(&entries[i].1) {
+        while i < entries.len()
+            && !entry_breaks_alignment(entries, i, first_shares_open_brace, last_shares_close_brace)
+        {
             // Comments attached to a key break the alignment run.
             if i > run_start && !extract_key_comments(&entries[i].0).is_empty() {
                 break;
