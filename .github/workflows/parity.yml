@@ -53,7 +53,7 @@ jobs:
         if: needs.changes.outputs.relevant == 'true'
       - uses: DeterminateSystems/nix-installer-action@b67ad2f0e8376a0bc947db191e4484285b6f5b56 # main
         if: needs.changes.outputs.relevant == 'true'
-      - uses: DeterminateSystems/magic-nix-cache-action@2cdbb78a6eed25b3bc8b97f863549be5f6567e55 # main
+      - uses: DeterminateSystems/magic-nix-cache-action@84c0677f58dcedf3b91f8223ce36a9ea5b3c84b7 # main
         if: needs.changes.outputs.relevant == 'true'
       - name: tf-format minimal vs tofu fmt (fixtures)
         if: needs.changes.outputs.relevant == 'true'
