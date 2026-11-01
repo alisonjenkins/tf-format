@@ -248,9 +248,9 @@ checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 
 [[package]]
 name = "hcl-edit"
-version = "0.9.7"
+version = "0.9.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a67cc5751cb5996669b9780cd738d4541a76c2d5f2f10c17af4965c5a03a5f5"
+checksum = "c786ecdd2baeb64c6d1d3598261dbb388b8e58f6f7b14d6eac24fc78c43c595e"
 dependencies = [
  "fnv",
  "hcl-primitives",
